@@ -1,0 +1,94 @@
+Quiero crear una aplicación web llamada "Magic Mirror AI".
+
+OBJETIVO:
+Construir un asistente virtual animado que aparezca como un personaje vivo en pantalla y pueda conversar con el usuario mediante voz en tiempo real.
+
+TECNOLOGÍAS:
+
+Frontend:
+- React
+- TypeScript
+- TailwindCSS
+- Framer Motion
+- PixiJS
+
+Backend:
+- Node.js
+- Express
+
+Base de datos:
+- Firebase Firestore
+
+IA:
+- OpenAI GPT
+- Whisper Speech To Text
+- OpenAI Text To Speech
+
+CARACTERÍSTICAS:
+
+1. Avatar animado en pantalla completa.
+
+2. El avatar debe:
+   - Parpadear automáticamente.
+   - Mover ligeramente la cabeza.
+   - Seguir el cursor.
+   - Tener expresiones faciales.
+   - Mostrar estado:
+     * Escuchando
+     * Pensando
+     * Hablando
+     * Inactivo
+
+3. Sistema de conversación en tiempo real:
+   - Capturar micrófono.
+   - Detectar voz automáticamente.
+   - Convertir voz a texto.
+   - Enviar texto al modelo de IA.
+   - Recibir respuesta.
+   - Convertir respuesta a audio.
+   - Reproducir audio.
+
+4. Sincronización labial:
+   - Analizar volumen del audio.
+   - Abrir y cerrar la boca según intensidad.
+   - Animación suave.
+
+5. Memoria:
+   - Guardar conversaciones.
+   - Recordar información importante.
+   - Historial completo.
+
+6. Panel de configuración:
+   - API Key.
+   - Selección de voz.
+   - Velocidad de voz.
+   - Volumen.
+   - Personalidad del personaje.
+
+7. Personalidad editable:
+   - Nombre.
+   - Edad ficticia.
+   - Historia.
+   - Tono de conversación.
+   - Estilo de respuesta.
+
+8. Diseño:
+   - Futurista.
+   - Profesional.
+   - Responsive.
+   - Efectos visuales suaves.
+
+9. Arquitectura limpia:
+   - Componentes reutilizables.
+   - Hooks personalizados.
+   - Servicios separados.
+   - Código documentado.
+
+10. Preparar para futuras funciones:
+   - Control de aplicaciones.
+   - Integración con calendario.
+   - Gestión de tareas.
+   - Búsqueda web.
+   - Automatizaciones.
+
+Genera el proyecto completo con estructura de carpetas, frontend, backend, configuración y ejemplos funcionales.
