@@ -1,23 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  useTranscribeAudio, 
-  useSendChat, 
-  useTextToSpeech,
+import {
+  useTranscribeAudio,
+  useSendChat,
   useGetSettings,
   useSaveConversation
 } from '@workspace/api-client-react';
-import { ChatMessage, ChatMessageRole, Settings } from '@workspace/api-client-react/src/generated/api.schemas';
+import { ChatMessage } from '@workspace/api-client-react';
 import { useToast } from '@/hooks/use-toast';
 import { AvatarStatus } from './useAvatarState';
 
-// Base64 helper
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const result = reader.result as string;
-      const base64 = result.split(',')[1];
-      resolve(base64);
+      resolve(result.split(',')[1]);
     };
     reader.onerror = reject;
     reader.readAsDataURL(blob);
@@ -29,13 +26,19 @@ export function useVoicePipeline(
   setSpeakingVolume: (vol: number) => void
 ) {
   const { toast } = useToast();
-  
-  // Audio state
+
   const [isRecording, setIsRecording] = useState(false);
   const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [conversationId, setConversationId] = useState<number | null>(null);
-  
-  // Refs for audio processing
+  const [conversationSaved, setConversationSaved] = useState(false);
+
+  // Use refs so cleanup effect never needs to change
+  const historyRef = useRef<ChatMessage[]>([]);
+  const conversationSavedRef = useRef(false);
+
+  // Keep refs in sync with state
+  historyRef.current = history;
+  conversationSavedRef.current = conversationSaved;
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -45,113 +48,97 @@ export function useVoicePipeline(
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
   const playbackSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const isRecordingRef = useRef(false);
 
-  // APIs
   const { data: settings } = useGetSettings({ query: { queryKey: ['/api/settings'] } });
   const transcribeMutation = useTranscribeAudio();
   const chatMutation = useSendChat();
-  const ttsMutation = useTextToSpeech();
   const saveMutation = useSaveConversation();
 
-  // Handle auto-saving on unmount or manual trigger
-  const handleSave = useCallback(() => {
-    if (history.length > 0 && !conversationId) {
-      saveMutation.mutate(
-        { data: { title: `Chat ${new Date().toLocaleDateString()}`, messages: history } },
-        {
-          onSuccess: (data) => {
-            setConversationId(data.id);
-          }
-        }
-      );
-    }
-  }, [history, conversationId, saveMutation]);
+  // Keep mutation ref stable to avoid stale closures in cleanup
+  const saveMutationRef = useRef(saveMutation);
+  saveMutationRef.current = saveMutation;
 
+  // Cleanup effect runs only on unmount — refs hold latest values
   useEffect(() => {
     return () => {
-      if (playbackAudioRef.current) {
-        playbackAudioRef.current.pause();
-      }
+      if (playbackAudioRef.current) playbackAudioRef.current.pause();
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         audioContextRef.current.close();
       }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+
+      // Save on unmount only once
+      const msgs = historyRef.current;
+      if (msgs.length > 0 && !conversationSavedRef.current) {
+        conversationSavedRef.current = true;
+        saveMutationRef.current.mutate({
+          data: { title: `Chat ${new Date().toLocaleDateString()}`, messages: msgs }
+        });
       }
-      handleSave();
     };
-  }, [handleSave]);
+  }, []); // Empty deps — intentional, uses refs
 
-  const processAIResponse = async (text: string) => {
-    setStatus('thinking');
-    try {
-      const ttsRes = await ttsMutation.mutateAsync({
-        data: {
-          text,
-          voice: settings?.voiceId || 'aura-asteria-en',
-          speed: settings?.voiceSpeed || 1.0
-        }
+  const saveConversation = useCallback(() => {
+    const msgs = historyRef.current;
+    if (msgs.length > 0 && !conversationSavedRef.current) {
+      conversationSavedRef.current = true;
+      setConversationSaved(true);
+      saveMutation.mutate({
+        data: { title: `Chat ${new Date().toLocaleDateString()}`, messages: msgs }
       });
+    }
+  }, [saveMutation]);
 
-      // Play audio and sync mouth
-      const audioUrl = `data:audio/mp3;base64,${ttsRes.audioBase64}`;
-      const audio = new Audio(audioUrl);
-      playbackAudioRef.current = audio;
-
-      // Setup analyser for mouth sync
-      if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      }
-      
-      const ctx = audioContextRef.current;
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
+  // Browser-native TTS using Web Speech API — no API key required
+  const playTTS = (text: string, speed: number): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!('speechSynthesis' in window)) {
+        setStatus('idle');
+        resolve();
+        return;
       }
 
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      playbackAnalyserRef.current = analyser;
+      window.speechSynthesis.cancel();
 
-      const source = ctx.createMediaElementSource(audio);
-      playbackSourceRef.current = source;
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = Math.max(0.5, Math.min(2.0, speed));
+      utterance.pitch = 0.9;
+      utterance.volume = 1.0;
+
+      // Prefer an English voice if available
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(v => v.lang.startsWith('en') && !v.localService)
+        || voices.find(v => v.lang.startsWith('en'))
+        || voices[0];
+      if (preferred) utterance.voice = preferred;
 
       setStatus('speaking');
-      audio.play();
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const updateMouth = () => {
-        if (audio.paused || audio.ended) {
-          setSpeakingVolume(0);
-          setStatus('idle');
-          if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-          return;
-        }
-        analyser.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
-        }
-        const avg = sum / dataArray.length;
-        // Normalize roughly (0-255) to (0-1) with a boost
-        setSpeakingVolume(Math.min(avg / 100, 1.0));
-        animationFrameRef.current = requestAnimationFrame(updateMouth);
-      };
-      
-      updateMouth();
+      // Simulate mouth movement with oscillating volume since SpeechSynthesis
+      // doesn't expose audio data — animate at ~10fps during speech
+      let mouthAngle = 0;
+      const mouthInterval = window.setInterval(() => {
+        mouthAngle += 0.4;
+        setSpeakingVolume(0.4 + Math.abs(Math.sin(mouthAngle)) * 0.6);
+      }, 80);
 
-      audio.onended = () => {
-        setStatus('idle');
+      utterance.onend = () => {
+        clearInterval(mouthInterval);
         setSpeakingVolume(0);
-        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+        setStatus('idle');
+        resolve();
       };
 
-    } catch (err) {
-      console.error(err);
-      toast({ title: 'TTS Error', description: 'Failed to synthesize speech', variant: 'destructive' });
-      setStatus('idle');
-    }
+      utterance.onerror = () => {
+        clearInterval(mouthInterval);
+        setSpeakingVolume(0);
+        setStatus('idle');
+        resolve();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    });
   };
 
   const handleAudioData = async (blob: Blob) => {
@@ -162,52 +149,49 @@ export function useVoicePipeline(
         data: { audioBase64: base64, mimeType: blob.type || 'audio/webm' }
       });
 
-      if (!transcribeRes.text.trim()) {
+      const userText = transcribeRes.text.trim();
+      if (!userText) {
         setStatus('idle');
         return;
       }
 
-      const newUserMsg: ChatMessage = { role: 'user', content: transcribeRes.text };
-      const newHistory = [...history, newUserMsg];
-      setHistory(newHistory);
+      const newUserMsg: ChatMessage = { role: 'user' as const, content: userText };
+      const updatedHistory = [...historyRef.current, newUserMsg];
+      setHistory(updatedHistory);
 
       const chatRes = await chatMutation.mutateAsync({
         data: {
-          message: transcribeRes.text,
-          history: history,
-          systemPrompt: settings?.systemPrompt || 'You are an AI companion.'
+          message: userText,
+          history: historyRef.current,
+          systemPrompt: settings?.systemPrompt ?? 'You are Mirror, an intelligent AI assistant. Be concise and friendly.'
         }
       });
 
-      const newAIMsg: ChatMessage = { role: 'assistant', content: chatRes.message };
-      setHistory([...newHistory, newAIMsg]);
+      const aiMsg: ChatMessage = { role: 'assistant' as const, content: chatRes.message };
+      const finalHistory = [...updatedHistory, aiMsg];
+      setHistory(finalHistory);
 
-      await processAIResponse(chatRes.message);
+      const speed = settings?.voiceSpeed ?? 1.0;
+      await playTTS(chatRes.message, speed);
 
     } catch (err) {
-      console.error(err);
-      toast({ title: 'Processing Error', description: 'Failed to process voice input', variant: 'destructive' });
+      console.error('Pipeline error:', err);
+      toast({ title: 'Error', description: 'Failed to process voice input', variant: 'destructive' });
       setStatus('idle');
     }
   };
 
-  const checkSilence = () => {
-    if (!analyserRef.current || !isRecording) return;
+  const checkSilence = useCallback(() => {
+    if (!analyserRef.current || !isRecordingRef.current) return;
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(dataArray);
-    
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      sum += dataArray[i];
-    }
-    const avg = sum / dataArray.length;
+    const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
 
-    // Silence threshold
     if (avg < 15) {
       if (!silenceTimerRef.current) {
         silenceTimerRef.current = window.setTimeout(() => {
           stopRecording();
-        }, 1500); // 1.5s of silence
+        }, 1500);
       }
     } else {
       if (silenceTimerRef.current) {
@@ -215,27 +199,46 @@ export function useVoicePipeline(
         silenceTimerRef.current = null;
       }
     }
-    
-    if (isRecording) {
+
+    if (isRecordingRef.current) {
       animationFrameRef.current = requestAnimationFrame(checkSilence);
     }
-  };
+  }, []);
 
-  const startRecording = async () => {
+  const stopRecording = useCallback(() => {
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(t => t.stop());
+      audioStreamRef.current = null;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+  }, []);
+
+  const startRecording = useCallback(async () => {
     try {
-      // Interrupt playback if needed
       if (playbackAudioRef.current && !playbackAudioRef.current.paused) {
         playbackAudioRef.current.pause();
-        setStatus('idle');
         setSpeakingVolume(0);
+        setStatus('idle');
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
 
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      audioContextRef.current = new AudioContext();
-      
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      audioContextRef.current = new AudioCtx();
+
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const analyser = audioContextRef.current.createAnalyser();
       analyser.fftSize = 512;
@@ -244,7 +247,7 @@ export function useVoicePipeline(
 
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
-      
+
       const chunks: BlobPart[] = [];
       mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
       mediaRecorder.onstop = () => {
@@ -253,37 +256,23 @@ export function useVoicePipeline(
       };
 
       mediaRecorder.start();
+      isRecordingRef.current = true;
       setIsRecording(true);
       setStatus('listening');
-      
-      // Start silence detection loop
       checkSilence();
 
     } catch (err) {
-      console.error("Microphone access denied:", err);
+      console.error('Microphone error:', err);
       toast({ title: 'Microphone Error', description: 'Could not access microphone', variant: 'destructive' });
     }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach(t => t.stop());
-    }
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    setIsRecording(false);
-  };
+  }, [checkSilence, setStatus, setSpeakingVolume]);
 
   return {
     startRecording,
     stopRecording,
+    saveConversation,
     isRecording,
     history,
-    analyser: analyserRef.current, // Expose for visualizer if needed
+    analyser: analyserRef.current,
   };
 }

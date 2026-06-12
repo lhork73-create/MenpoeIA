@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { motion, useAnimation, useSpring, useTransform } from 'framer-motion';
+import { motion, useSpring, useTransform, type Variants } from 'framer-motion';
 import { AvatarStatus } from '../hooks/useAvatarState';
 
 interface AvatarProps {
@@ -49,18 +49,18 @@ export function Avatar({ status, mouthOpenAmount }: AvatarProps) {
     speaking: 'rgba(0, 240, 255, 0.8)'
   };
 
-  const outerRingVariants = {
-    idle: { rotate: 0, scale: 1, opacity: 0.3, transition: { duration: 20, repeat: Infinity, ease: "linear" } },
-    listening: { rotate: 180, scale: 1.05, opacity: 0.6, transition: { duration: 10, repeat: Infinity, ease: "linear" } },
-    thinking: { rotate: -360, scale: 0.95, opacity: 0.8, transition: { duration: 5, repeat: Infinity, ease: "linear" } },
-    speaking: { rotate: 90, scale: [1, 1.05, 1], opacity: 0.7, transition: { rotate: { duration: 15, repeat: Infinity, ease: "linear" }, scale: { duration: 1.5, repeat: Infinity } } }
+  const outerRingVariants: Variants = {
+    idle: { rotate: 0, scale: 1, opacity: 0.3, transition: { duration: 20, repeat: Infinity, ease: "linear" as const } },
+    listening: { rotate: 180, scale: 1.05, opacity: 0.6, transition: { duration: 10, repeat: Infinity, ease: "linear" as const } },
+    thinking: { rotate: -360, scale: 0.95, opacity: 0.8, transition: { duration: 5, repeat: Infinity, ease: "linear" as const } },
+    speaking: { rotate: 90, scale: [1, 1.05, 1], opacity: 0.7, transition: { rotate: { duration: 15, repeat: Infinity, ease: "linear" as const }, scale: { duration: 1.5, repeat: Infinity } } }
   };
 
-  const innerRingVariants = {
-    idle: { rotate: 360, opacity: 0.2, transition: { duration: 30, repeat: Infinity, ease: "linear" } },
-    listening: { rotate: -360, opacity: 0.5, transition: { duration: 15, repeat: Infinity, ease: "linear" } },
-    thinking: { rotate: 360, opacity: 0.7, transition: { duration: 8, repeat: Infinity, ease: "linear" } },
-    speaking: { rotate: -180, opacity: 0.6, transition: { duration: 10, repeat: Infinity, ease: "linear" } }
+  const innerRingVariants: Variants = {
+    idle: { rotate: 360, opacity: 0.2, transition: { duration: 30, repeat: Infinity, ease: "linear" as const } },
+    listening: { rotate: -360, opacity: 0.5, transition: { duration: 15, repeat: Infinity, ease: "linear" as const } },
+    thinking: { rotate: 360, opacity: 0.7, transition: { duration: 8, repeat: Infinity, ease: "linear" as const } },
+    speaking: { rotate: -180, opacity: 0.6, transition: { duration: 10, repeat: Infinity, ease: "linear" as const } }
   };
 
   const eyeVariants = {

@@ -5,15 +5,8 @@ import { TextToSpeechBody, TextToSpeechResponse } from "@workspace/api-zod";
 const router: IRouter = Router();
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const VALID_VOICES = [
-  "Arista-PlayAI", "Atlas-PlayAI", "Basil-PlayAI", "Briggs-PlayAI",
-  "Calum-PlayAI", "Celeste-PlayAI", "Cheyenne-PlayAI", "Chip-PlayAI",
-  "Cillian-PlayAI", "Deedee-PlayAI", "Eleanor-PlayAI", "Fritz-PlayAI",
-  "Gail-PlayAI", "George-PlayAI", "Giulia-PlayAI", "Grace-PlayAI",
-  "Huxley-PlayAI", "Indigo-PlayAI", "Mamaw-PlayAI", "Mason-PlayAI",
-  "Mikail-PlayAI", "Mitch-PlayAI", "Myra-PlayAI", "Nyx-PlayAI",
-  "Nia-PlayAI", "Quinn-PlayAI", "Thunder-PlayAI", "Zia-PlayAI",
-];
+// Orpheus TTS voices (canopylabs/orpheus-v1-english)
+const ORPHEUS_VOICES = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"];
 
 router.post("/tts", async (req, res): Promise<void> => {
   const parsed = TextToSpeechBody.safeParse(req.body);
@@ -24,19 +17,20 @@ router.post("/tts", async (req, res): Promise<void> => {
 
   const { text, voice, speed } = parsed.data;
 
-  const selectedVoice = (voice && VALID_VOICES.includes(voice)) ? voice : "Fritz-PlayAI";
+  const selectedVoice = (voice && ORPHEUS_VOICES.includes(voice.toLowerCase()))
+    ? voice.toLowerCase()
+    : "tara";
 
   const audioResponse = await groq.audio.speech.create({
-    model: "playai-tts",
+    model: "canopylabs/orpheus-v1-english",
     input: text,
     voice: selectedVoice,
     response_format: "wav",
     speed: speed ?? 1.0,
-  });
+  } as Parameters<typeof groq.audio.speech.create>[0]);
 
   const arrayBuffer = await audioResponse.arrayBuffer();
-  const audioBuffer = Buffer.from(arrayBuffer);
-  const audioBase64 = audioBuffer.toString("base64");
+  const audioBase64 = Buffer.from(arrayBuffer).toString("base64");
 
   res.json(TextToSpeechResponse.parse({ audioBase64 }));
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChatMessage } from '@workspace/api-client-react/src/generated/api.schemas';
+import { ChatMessage } from '@workspace/api-client-react';
 import { MessageSquare, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 

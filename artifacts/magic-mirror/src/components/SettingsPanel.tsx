@@ -2,7 +2,6 @@ import React, { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Settings } from '@workspace/api-client-react/src/generated/api.schemas';
 import { useUpdateSettings, useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { useToast } from '@/hooks/use-toast';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -106,10 +105,14 @@ export function SettingsPanel() {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="aura-asteria-en">Asteria (Female)</SelectItem>
-                      <SelectItem value="aura-luna-en">Luna (Female)</SelectItem>
-                      <SelectItem value="aura-orion-en">Orion (Male)</SelectItem>
-                      <SelectItem value="aura-arcas-en">Arcas (Male)</SelectItem>
+                      <SelectItem value="tara">Tara (Female)</SelectItem>
+                      <SelectItem value="leah">Leah (Female)</SelectItem>
+                      <SelectItem value="jess">Jess (Female)</SelectItem>
+                      <SelectItem value="mia">Mia (Female)</SelectItem>
+                      <SelectItem value="zoe">Zoe (Female)</SelectItem>
+                      <SelectItem value="leo">Leo (Male)</SelectItem>
+                      <SelectItem value="dan">Dan (Male)</SelectItem>
+                      <SelectItem value="zac">Zac (Male)</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
