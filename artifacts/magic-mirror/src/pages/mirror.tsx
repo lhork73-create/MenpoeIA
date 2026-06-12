@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 
 export default function MirrorPage() {
   const { status, setStatus, mouthOpenAmount, setSpeakingVolume } = useAvatarState();
-  const { isRecording, startRecording, stopRecording, history, analyser } = useVoicePipeline(setStatus, setSpeakingVolume);
+  const { isRecording, isProcessing, startRecording, stopRecording, history, analyser } = useVoicePipeline(setStatus, setSpeakingVolume);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
 
   return (
@@ -44,9 +44,10 @@ export default function MirrorPage() {
       </div>
 
       {/* Voice Controls */}
-      <VoiceControl 
+      <VoiceControl
         status={status}
         isRecording={isRecording}
+        isProcessing={isProcessing}
         startRecording={startRecording}
         stopRecording={stopRecording}
         analyser={analyser}
