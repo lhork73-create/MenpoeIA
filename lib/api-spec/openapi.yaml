@@ -1,22 +1,30 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Magic Mirror AI API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: chat
+    description: AI chat operations
+  - name: transcribe
+    description: Speech-to-text operations
+  - name: tts
+    description: Text-to-speech operations
+  - name: conversations
+    description: Conversation history
+  - name: settings
+    description: Avatar and personality settings
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +32,292 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /chat:
+    post:
+      operationId: sendChat
+      tags: [chat]
+      summary: Send a message to the AI and receive a response
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatInput"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+
+  /transcribe:
+    post:
+      operationId: transcribeAudio
+      tags: [transcribe]
+      summary: Transcribe audio to text using Groq Whisper
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TranscribeInput"
+      responses:
+        "200":
+          description: Transcription result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscribeResponse"
+
+  /tts:
+    post:
+      operationId: textToSpeech
+      tags: [tts]
+      summary: Convert text to speech audio (base64)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TtsInput"
+      responses:
+        "200":
+          description: Audio data in base64
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TtsResponse"
+
+  /conversations:
+    get:
+      operationId: listConversations
+      tags: [conversations]
+      summary: List all saved conversations
+      responses:
+        "200":
+          description: List of conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Conversation"
+    post:
+      operationId: saveConversation
+      tags: [conversations]
+      summary: Save a new conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationInput"
+      responses:
+        "201":
+          description: Created conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+
+  /conversations/{id}:
+    delete:
+      operationId: deleteConversation
+      tags: [conversations]
+      summary: Delete a conversation by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get avatar personality and app settings
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update avatar personality and app settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsInput"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
 
+    ChatInput:
+      type: object
+      required: [message, history]
+      properties:
+        message:
+          type: string
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        systemPrompt:
+          type: ["string", "null"]
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+
+    ChatResponse:
+      type: object
+      required: [message, tokensUsed]
+      properties:
+        message:
+          type: string
+        tokensUsed:
+          type: integer
+
+    TranscribeInput:
+      type: object
+      required: [audioBase64, mimeType]
+      properties:
+        audioBase64:
+          type: string
+        mimeType:
+          type: string
+
+    TranscribeResponse:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+
+    TtsInput:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+        voice:
+          type: ["string", "null"]
+        speed:
+          type: ["number", "null"]
+
+    TtsResponse:
+      type: object
+      required: [audioBase64]
+      properties:
+        audioBase64:
+          type: string
+
+    Conversation:
+      type: object
+      required: [id, title, messages, createdAt]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        createdAt:
+          type: string
+
+    ConversationInput:
+      type: object
+      required: [title, messages]
+      properties:
+        title:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+
+    DeleteResult:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+
+    Settings:
+      type: object
+      required: [id, avatarName, avatarAge, avatarPersonality, avatarTone, voiceId, voiceSpeed, voiceVolume, systemPrompt]
+      properties:
+        id:
+          type: integer
+        avatarName:
+          type: string
+        avatarAge:
+          type: integer
+        avatarPersonality:
+          type: string
+        avatarTone:
+          type: string
+        voiceId:
+          type: string
+        voiceSpeed:
+          type: number
+        voiceVolume:
+          type: number
+        systemPrompt:
+          type: string
+
+    SettingsInput:
+      type: object
+      properties:
+        avatarName:
+          type: string
+        avatarAge:
+          type: integer
+        avatarPersonality:
+          type: string
+        avatarTone:
+          type: string
+        voiceId:
+          type: string
+        voiceSpeed:
+          type: number
+        voiceVolume:
+          type: number
+        systemPrompt:
+          type: string
