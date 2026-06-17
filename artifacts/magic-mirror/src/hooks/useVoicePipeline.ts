@@ -49,6 +49,7 @@ export function useVoicePipeline(
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [history, setHistory] = useState<ChatMessage[]>([]);
+  const [lastTranscript, setLastTranscript] = useState('');
 
   // Refs so effects never go stale
   const historyRef = useRef<ChatMessage[]>([]);
@@ -168,6 +169,7 @@ export function useVoicePipeline(
         toast({ title: 'Nothing detected', description: 'Could not hear any speech. Try again.' });
         return;
       }
+      setLastTranscript(userText);
 
       const userMsg: ChatMessage = { role: 'user' as const, content: userText };
       const updatedHistory = [...historyRef.current, userMsg];
@@ -294,6 +296,7 @@ export function useVoicePipeline(
     isRecording,
     isProcessing,
     history,
+    lastTranscript,
     analyser: analyserRef.current,
   };
 }

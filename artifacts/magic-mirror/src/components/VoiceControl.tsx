@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Send, Loader2 } from 'lucide-react';
+import { Mic, Send, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AvatarStatus } from '../hooks/useAvatarState';
 
@@ -11,6 +11,7 @@ interface VoiceControlProps {
   startRecording: () => void;
   stopRecording: () => void;
   analyser?: AnalyserNode | null;
+  lastTranscript?: string;
 }
 
 export function VoiceControl({
@@ -20,17 +21,18 @@ export function VoiceControl({
   startRecording,
   stopRecording,
   analyser,
+  lastTranscript,
 }: VoiceControlProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
+  const [recSecs, setRecSecs] = useState(0);
 
-  // Waveform for MIC input (only when recording)
+  // ── Waveform visualizer ───────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
     cancelAnimationFrame(animRef.current);
 
     if (isRecording && analyser) {
@@ -38,15 +40,14 @@ export function VoiceControl({
       const draw = () => {
         animRef.current = requestAnimationFrame(draw);
         analyser.getByteFrequencyData(data);
-        const w = canvas.width;
-        const h = canvas.height;
+        const w = canvas.width, h = canvas.height;
         ctx.clearRect(0, 0, w, h);
         const barW = Math.max(2, (w / data.length) * 2);
         let x = 0;
         for (let i = 0; i < data.length; i++) {
           const barH = (data[i] / 255) * h * 0.9;
           const alpha = 0.3 + (data[i] / 255) * 0.7;
-          ctx.fillStyle = `rgba(0,240,255,${alpha})`;
+          ctx.fillStyle = `rgba(255,80,80,${alpha})`;
           ctx.beginPath();
           ctx.roundRect(x, h - barH, barW - 1, barH, 2);
           ctx.fill();
@@ -55,46 +56,93 @@ export function VoiceControl({
       };
       draw();
     } else {
-      // Clear canvas when not recording
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
-
     return () => cancelAnimationFrame(animRef.current);
   }, [isRecording, analyser]);
 
-  // Determine what the button should do and show
-  const canRecord = !isProcessing && status !== 'thinking';
-  const isSpeaking = status === 'speaking';
+  // ── Recording timer ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isRecording) { setRecSecs(0); return; }
+    const id = setInterval(() => setRecSecs(s => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [isRecording]);
 
-  const handleButtonClick = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
+  // ── Space bar shortcut ────────────────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      if (isProcessing) return;
+      if (isRecording) stopRecording();
+      else startRecording();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isRecording, isProcessing, startRecording, stopRecording]);
+
+  const isSpeaking = status === 'speaking';
+  const canRecord = !isProcessing && status !== 'thinking';
+
+  const handleClick = () => {
+    if (isRecording) stopRecording();
+    else if (canRecord || isSpeaking) startRecording();
   };
 
+  const formatTime = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
   const statusLabel = isRecording
-    ? 'Tap to send'
+    ? `Tap or Space to send · ${formatTime(recSecs)}`
     : isProcessing
     ? 'Processing...'
     : isSpeaking
     ? 'Speaking... (tap to interrupt)'
-    : 'Tap to speak';
+    : 'Tap or Space to speak';
 
   return (
     <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-50 w-[90%] max-w-lg">
 
       {/* Waveform / status bar */}
       <div className="w-full h-16 glass-panel rounded-full overflow-hidden flex items-center justify-center relative">
-        <canvas
-          ref={canvasRef}
-          width={600}
-          height={64}
-          className="absolute inset-0 w-full h-full"
-        />
+        <canvas ref={canvasRef} width={600} height={64} className="absolute inset-0 w-full h-full" />
+
         <AnimatePresence mode="wait">
-          {!isRecording && (
+          {isRecording ? (
+            /* Recording: show timer */
+            <motion.div
+              key="rec"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              className="relative text-red-400 text-sm font-mono tracking-widest font-semibold select-none"
+            >
+              ● REC {formatTime(recSecs)}
+            </motion.div>
+          ) : isProcessing ? (
+            <motion.div
+              key="proc"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              className="relative text-secondary/80 text-xs font-mono uppercase tracking-widest"
+            >
+              Analyzing neural signal...
+            </motion.div>
+          ) : lastTranscript && status === 'idle' ? (
+            /* Idle: show last transcript */
+            <motion.div
+              key="transcript"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 0.55, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              className="relative text-primary/60 text-xs font-mono truncate px-8 max-w-full"
+            >
+              "{lastTranscript}"
+            </motion.div>
+          ) : (
             <motion.div
               key={status}
               initial={{ opacity: 0, y: 4 }}
@@ -102,11 +150,7 @@ export function VoiceControl({
               exit={{ opacity: 0, y: -4 }}
               className="relative text-primary/60 text-xs font-mono uppercase tracking-widest"
             >
-              {isProcessing
-                ? 'Analyzing neural signal...'
-                : isSpeaking
-                ? 'Transmitting response...'
-                : 'Neural link ready'}
+              {isSpeaking ? 'Transmitting response...' : 'Neural link ready'}
             </motion.div>
           )}
         </AnimatePresence>
@@ -125,7 +169,7 @@ export function VoiceControl({
               ? 'bg-primary/30 text-primary cursor-wait'
               : 'bg-primary hover:bg-primary/90 text-primary-foreground shadow-[0_0_30px_rgba(0,240,255,0.4)]'
           }`}
-          onClick={handleButtonClick}
+          onClick={handleClick}
           disabled={isProcessing}
           aria-label={isRecording ? 'Stop and send' : 'Start speaking'}
         >
@@ -135,21 +179,11 @@ export function VoiceControl({
                 <Loader2 className="w-8 h-8 animate-spin" />
               </motion.div>
             ) : isRecording ? (
-              <motion.div
-                key="send"
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-              >
+              <motion.div key="send" initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0, opacity: 0 }}>
                 <Send className="w-8 h-8" />
               </motion.div>
             ) : (
-              <motion.div
-                key="mic"
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-              >
+              <motion.div key="mic" initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0, opacity: 0 }}>
                 <Mic className="w-8 h-8" />
               </motion.div>
             )}
@@ -157,7 +191,7 @@ export function VoiceControl({
         </Button>
       </motion.div>
 
-      {/* Instruction hint */}
+      {/* Status hint */}
       <motion.div
         key={statusLabel}
         initial={{ opacity: 0, y: 4 }}
