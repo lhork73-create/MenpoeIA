@@ -9,7 +9,6 @@ import { ChatMessage } from '@workspace/api-client-react';
 import { useToast } from '@/hooks/use-toast';
 import { AvatarStatus } from './useAvatarState';
 
-// Convert Blob → base64 string (strip data: prefix)
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -18,11 +17,10 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
-// Safe helpers — speechSynthesis may be undefined in iframes / some browsers
 const hasSpeech = () => typeof window !== 'undefined' && 'speechSynthesis' in window && !!window.speechSynthesis;
 const safeCancel = () => { if (hasSpeech()) window.speechSynthesis.cancel(); };
 
-// Select the best available browser TTS voice (español primero, luego inglés)
+// Voces: español primero, luego inglés
 const getBestVoice = (): SpeechSynthesisVoice | null => {
   if (!hasSpeech()) return null;
   const voices = window.speechSynthesis.getVoices();
@@ -49,26 +47,26 @@ export function useVoicePipeline(
 ) {
   const { toast } = useToast();
 
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [history, setHistory] = useState<ChatMessage[]>([]);
+  const [isRecording,   setIsRecording]   = useState(false);
+  const [isProcessing,  setIsProcessing]  = useState(false);
+  const [history,       setHistory]       = useState<ChatMessage[]>([]);
   const [lastTranscript, setLastTranscript] = useState('');
+  const [tokensTotal,   setTokensTotal]   = useState(0);
+  const [sessionStart,  setSessionStart]  = useState<number | null>(null);
 
-  // Refs so effects never go stale
   const historyRef = useRef<ChatMessage[]>([]);
   historyRef.current = history;
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioStreamRef = useRef<MediaStream | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const animFrameRef = useRef<number | null>(null);
-  const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const savedRef = useRef(false);
+  const audioStreamRef   = useRef<MediaStream | null>(null);
+  const analyserRef      = useRef<AnalyserNode | null>(null);
+  const audioCtxRef      = useRef<AudioContext | null>(null);
+  const animFrameRef     = useRef<number | null>(null);
+  const speechRef        = useRef<SpeechSynthesisUtterance | null>(null);
+  const savedRef         = useRef(false);
 
-  // Call hook at top level, keep ref synced for use inside cleanup effect
   const save = useSaveConversation();
-  const saveMutationRef = useRef(save);
+  const saveMutationRef  = useRef(save);
   saveMutationRef.current = save;
 
   const { data: settings } = useGetSettings({ query: { queryKey: ['/api/settings'] } });
@@ -76,7 +74,7 @@ export function useVoicePipeline(
   settingsRef.current = settings;
 
   const transcribeMutation = useTranscribeAudio();
-  const chatMutation = useSendChat();
+  const chatMutation       = useSendChat();
 
   // Cleanup on unmount — save once
   useEffect(() => {
@@ -90,30 +88,27 @@ export function useVoicePipeline(
       if (msgs.length > 0 && !savedRef.current) {
         savedRef.current = true;
         saveMutationRef.current.mutate({
-          data: { title: `Chat ${new Date().toLocaleDateString()}`, messages: msgs },
+          data: { title: `Chat ${new Date().toLocaleDateString('es-MX')}`, messages: msgs },
         });
       }
     };
-  }, []); // intentionally empty — refs hold latest values
+  }, []);
 
-  // ─── TTS with browser SpeechSynthesis ─────────────────────────────────────
+  // ─── TTS ──────────────────────────────────────────────────────────────────
   const speak = useCallback((text: string, speed: number): Promise<void> => {
     return new Promise((resolve) => {
       if (!hasSpeech()) { resolve(); return; }
-
       safeCancel();
 
       const utter = new SpeechSynthesisUtterance(text);
-      utter.rate = Math.max(0.7, Math.min(1.6, speed));
+      utter.rate  = Math.max(0.7, Math.min(1.6, speed));
       utter.pitch = 1.0;
       utter.volume = 1.0;
 
-      // Wait for voices to load (needed in some browsers)
       const applyVoice = () => {
         const voice = getBestVoice();
         if (voice) utter.voice = voice;
       };
-
       if (window.speechSynthesis.getVoices().length === 0) {
         window.speechSynthesis.onvoiceschanged = () => { applyVoice(); };
       } else {
@@ -123,11 +118,9 @@ export function useVoicePipeline(
       speechRef.current = utter;
       setStatus('speaking');
 
-      // Animate mouth with smooth sinusoidal wave while TTS plays
       let t = 0;
       const animateMouth = () => {
         t += 0.12;
-        // Natural speech rhythm: fast oscillation with occasional pauses
         const wave = Math.max(0, Math.sin(t) * 0.7 + Math.sin(t * 1.7) * 0.3);
         setSpeakingVolume(wave);
         animFrameRef.current = requestAnimationFrame(animateMouth);
@@ -146,7 +139,7 @@ export function useVoicePipeline(
         resolve();
       };
 
-      utter.onend = finish;
+      utter.onend   = finish;
       utter.onerror = finish;
 
       if (hasSpeech()) window.speechSynthesis.speak(utter);
@@ -154,7 +147,7 @@ export function useVoicePipeline(
     });
   }, [setStatus, setSpeakingVolume]);
 
-  // ─── Process audio blob after user stops recording ─────────────────────────
+  // ─── Process audio blob ─────────────────────────────────────────────────
   const handleAudioBlob = useCallback(async (blob: Blob) => {
     setIsProcessing(true);
     setStatus('thinking');
@@ -174,6 +167,9 @@ export function useVoicePipeline(
       }
       setLastTranscript(userText);
 
+      // Mark session start on first message
+      setSessionStart(prev => prev ?? Date.now());
+
       const userMsg: ChatMessage = { role: 'user' as const, content: userText };
       const updatedHistory = [...historyRef.current, userMsg];
       setHistory(updatedHistory);
@@ -188,7 +184,7 @@ export function useVoicePipeline(
 
       const aiMsg: ChatMessage = { role: 'assistant' as const, content: chatRes.message };
       setHistory([...updatedHistory, aiMsg]);
-
+      setTokensTotal(prev => prev + (chatRes.tokensUsed ?? 0));
       setIsProcessing(false);
 
       await speak(chatRes.message, settingsRef.current?.voiceSpeed ?? 1.0);
@@ -201,73 +197,51 @@ export function useVoicePipeline(
     }
   }, [transcribeMutation, chatMutation, speak, toast, setStatus]);
 
-  // ─── Stop recording: halts mic, triggers processing ────────────────────────
+  // ─── Stop recording ──────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
     if (!mediaRecorderRef.current) return;
 
-    // Stop the analyser animation frame if running
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
     }
-
-    // Stop the mic tracks
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((t) => t.stop());
       audioStreamRef.current = null;
     }
-
-    // Stop the recorder — onstop will fire handleAudioBlob
     if (mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
-
-    mediaRecorderRef.current = null;
     analyserRef.current = null;
-
     setIsRecording(false);
-    // Status → thinking is set inside handleAudioBlob
   }, []);
 
-  // ─── Start recording: opens mic, NO auto-stop ──────────────────────────────
+  // ─── Start recording ─────────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
-    // If AI is speaking, interrupt it
     safeCancel();
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
-    setSpeakingVolume(0);
-
-    // Close any existing audio context from TTS
-    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-      await audioCtxRef.current.close();
-      audioCtxRef.current = null;
-    }
+    setStatus('listening');
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
 
-      // Build analyser for the waveform visualizer (NOT connected to mouth)
-      const AudioCtx = window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      audioCtxRef.current = new AudioCtx();
-      const source = audioCtxRef.current.createMediaStreamSource(stream);
-      const analyser = audioCtxRef.current.createAnalyser();
-      analyser.fftSize = 512;
+      // Analyser for waveform visualisation
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AudioCtx();
+      audioCtxRef.current = ctx;
+      const source   = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
       source.connect(analyser);
-      // NOT connected to ctx.destination — we don't want mic playback
       analyserRef.current = analyser;
 
-      const recorder = new MediaRecorder(stream);
-      const chunks: BlobPart[] = [];
+      const chunks: Blob[] = [];
+      const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '' });
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
         handleAudioBlob(blob);
       };
-
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
@@ -283,23 +257,52 @@ export function useVoicePipeline(
     }
   }, [handleAudioBlob, setStatus, setSpeakingVolume, toast]);
 
-  // ─── Manual save ───────────────────────────────────────────────────────────
+  // ─── Interrupt AI speech ─────────────────────────────────────────────────
+  const interruptSpeech = useCallback(() => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    setSpeakingVolume(0);
+    safeCancel();
+    setStatus('idle');
+  }, [setStatus, setSpeakingVolume]);
+
+  // ─── Reset conversation ──────────────────────────────────────────────────
+  const resetConversation = useCallback(() => {
+    interruptSpeech();
+    setHistory([]);
+    setLastTranscript('');
+    setTokensTotal(0);
+    setSessionStart(null);
+    savedRef.current = false;
+  }, [interruptSpeech]);
+
+  // ─── Manual save ─────────────────────────────────────────────────────────
   const saveConversation = useCallback(() => {
     const msgs = historyRef.current;
-    if (msgs.length > 0 && !savedRef.current) {
+    if (msgs.length > 0) {
       savedRef.current = true;
-      save.mutate({ data: { title: `Chat ${new Date().toLocaleDateString()}`, messages: msgs } });
+      const title = msgs[0]?.content?.slice(0, 40) || `Chat ${new Date().toLocaleDateString('es-MX')}`;
+      save.mutate({ data: { title, messages: msgs } });
+      toast({ title: 'Conversación guardada', description: 'Registrada en el historial.' });
+    } else {
+      toast({ title: 'Sin mensajes', description: 'Habla primero para guardar algo.', variant: 'destructive' });
     }
-  }, [save]);
+  }, [save, toast]);
 
   return {
     startRecording,
     stopRecording,
+    interruptSpeech,
+    resetConversation,
     saveConversation,
     isRecording,
     isProcessing,
     history,
     lastTranscript,
+    tokensTotal,
+    sessionStart,
     analyser: analyserRef.current,
   };
 }
