@@ -15,7 +15,7 @@ router.post("/chat", async (req, res): Promise<void> => {
   const { message, history, systemPrompt } = parsed.data;
 
   const systemMessage = systemPrompt ??
-    "You are Mirror, an intelligent AI assistant. Be concise, helpful, and personable. Keep responses under 3 sentences unless asked for more detail.";
+    "Eres Mirror, un asistente de IA inteligente. Responde siempre en español, de manera amigable, clara y concisa. Mantén tus respuestas en 3 oraciones o menos salvo que se pida más detalle.";
 
   const messages: Groq.Chat.ChatCompletionMessageParam[] = [
     { role: "system", content: systemMessage },

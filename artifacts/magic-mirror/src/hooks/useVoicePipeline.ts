@@ -22,15 +22,18 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
 const hasSpeech = () => typeof window !== 'undefined' && 'speechSynthesis' in window && !!window.speechSynthesis;
 const safeCancel = () => { if (hasSpeech()) window.speechSynthesis.cancel(); };
 
-// Select the best available browser TTS voice (prefer natural/neural/online)
+// Select the best available browser TTS voice (español primero, luego inglés)
 const getBestVoice = (): SpeechSynthesisVoice | null => {
   if (!hasSpeech()) return null;
   const voices = window.speechSynthesis.getVoices();
   const checks: ((v: SpeechSynthesisVoice) => boolean)[] = [
+    (v) => /neural|natural/i.test(v.name) && v.lang.startsWith('es'),
+    (v) => /online/i.test(v.name) && v.lang.startsWith('es'),
+    (v) => !v.localService && v.lang.startsWith('es'),
+    (v) => v.lang.startsWith('es-MX'),
+    (v) => v.lang.startsWith('es'),
     (v) => /neural|natural/i.test(v.name) && v.lang.startsWith('en'),
-    (v) => /online/i.test(v.name) && v.lang.startsWith('en'),
     (v) => !v.localService && v.lang.startsWith('en'),
-    (v) => v.lang.startsWith('en-US'),
     (v) => v.lang.startsWith('en'),
   ];
   for (const check of checks) {
@@ -166,7 +169,7 @@ export function useVoicePipeline(
       if (!userText) {
         setStatus('idle');
         setIsProcessing(false);
-        toast({ title: 'Nothing detected', description: 'Could not hear any speech. Try again.' });
+        toast({ title: 'Sin audio detectado', description: 'No se escuchó voz. Intenta de nuevo.' });
         return;
       }
       setLastTranscript(userText);
@@ -192,7 +195,7 @@ export function useVoicePipeline(
 
     } catch (err) {
       console.error('Pipeline error:', err);
-      toast({ title: 'Error', description: 'Something went wrong. Please try again.', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Algo salió mal. Intenta de nuevo.', variant: 'destructive' });
       setStatus('idle');
       setIsProcessing(false);
     }
@@ -273,8 +276,8 @@ export function useVoicePipeline(
     } catch (err) {
       console.error('Mic error:', err);
       toast({
-        title: 'Microphone Error',
-        description: 'Could not access the microphone. Please allow access and try again.',
+        title: 'Error de micrófono',
+        description: 'No se pudo acceder al micrófono. Permite el acceso e intenta de nuevo.',
         variant: 'destructive',
       });
     }

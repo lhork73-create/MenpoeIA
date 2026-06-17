@@ -7,7 +7,6 @@ import { SettingsPanel } from '@/components/SettingsPanel';
 export default function SettingsPage() {
   return (
     <div className="min-h-screen bg-background text-foreground p-6 md:p-12 relative overflow-x-hidden">
-      {/* Background elements */}
       <div className="fixed inset-0 pointer-events-none opacity-20">
         <div className="absolute top-0 right-0 w-1/2 h-1/2 bg-secondary/20 blur-[150px] rounded-full mix-blend-screen" />
         <div className="absolute bottom-0 left-0 w-1/2 h-1/2 bg-primary/20 blur-[150px] rounded-full mix-blend-screen" />
@@ -20,9 +19,9 @@ export default function SettingsPage() {
               <ArrowLeft className="w-5 h-5" />
             </Button>
           </Link>
-          <h1 className="text-3xl font-mono uppercase tracking-widest text-secondary glow-violet">System Diagnostics</h1>
+          <h1 className="text-3xl font-mono uppercase tracking-widest text-secondary glow-violet">Configuración</h1>
         </div>
-        
+
         <SettingsPanel />
       </div>
     </div>
