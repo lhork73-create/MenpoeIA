@@ -8,6 +8,9 @@ import {
 import { ChatMessage } from '@workspace/api-client-react';
 import { useToast } from '@/hooks/use-toast';
 import { AvatarStatus } from './useAvatarState';
+import { vibrateError } from '@/lib/haptic';
+
+export type ResponseLength = 'corta' | 'media' | 'larga';
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -17,10 +20,10 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
-const hasSpeech = () => typeof window !== 'undefined' && 'speechSynthesis' in window && !!window.speechSynthesis;
+const hasSpeech = () =>
+  typeof window !== 'undefined' && 'speechSynthesis' in window && !!window.speechSynthesis;
 const safeCancel = () => { if (hasSpeech()) window.speechSynthesis.cancel(); };
 
-// Voces: español primero, luego inglés
 const getBestVoice = (): SpeechSynthesisVoice | null => {
   if (!hasSpeech()) return null;
   const voices = window.speechSynthesis.getVoices();
@@ -29,6 +32,7 @@ const getBestVoice = (): SpeechSynthesisVoice | null => {
     (v) => /online/i.test(v.name) && v.lang.startsWith('es'),
     (v) => !v.localService && v.lang.startsWith('es'),
     (v) => v.lang.startsWith('es-MX'),
+    (v) => v.lang.startsWith('es-ES'),
     (v) => v.lang.startsWith('es'),
     (v) => /neural|natural/i.test(v.name) && v.lang.startsWith('en'),
     (v) => !v.localService && v.lang.startsWith('en'),
@@ -41,20 +45,28 @@ const getBestVoice = (): SpeechSynthesisVoice | null => {
   return voices[0] ?? null;
 };
 
+const LENGTH_INSTRUCTION: Record<ResponseLength, string> = {
+  corta: '\n\nIMPORTANTE: Esta respuesta debe ser MUY breve: máximo 1-2 oraciones.',
+  media: '',
+  larga: '\n\nIMPORTANTE: Puedes dar una respuesta detallada y completa en esta ocasión.',
+};
+
 export function useVoicePipeline(
   setStatus: (s: AvatarStatus) => void,
   setSpeakingVolume: (v: number) => void,
 ) {
   const { toast } = useToast();
 
-  const [isRecording,   setIsRecording]   = useState(false);
-  const [isProcessing,  setIsProcessing]  = useState(false);
-  const [history,       setHistory]       = useState<ChatMessage[]>([]);
+  const [isRecording,    setIsRecording]    = useState(false);
+  const [isProcessing,   setIsProcessing]   = useState(false);
+  const [history,        setHistory]        = useState<ChatMessage[]>([]);
   const [lastTranscript, setLastTranscript] = useState('');
-  const [tokensTotal,   setTokensTotal]   = useState(0);
-  const [sessionStart,  setSessionStart]  = useState<number | null>(null);
+  const [tokensTotal,    setTokensTotal]    = useState(0);
+  const [sessionStart,   setSessionStart]   = useState<number | null>(null);
+  const [responseLength, setResponseLength] = useState<ResponseLength>('media');
+  const [lastError,      setLastError]      = useState<string | null>(null);
 
-  const historyRef = useRef<ChatMessage[]>([]);
+  const historyRef       = useRef<ChatMessage[]>([]);
   historyRef.current = history;
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -62,8 +74,9 @@ export function useVoicePipeline(
   const analyserRef      = useRef<AnalyserNode | null>(null);
   const audioCtxRef      = useRef<AudioContext | null>(null);
   const animFrameRef     = useRef<number | null>(null);
-  const speechRef        = useRef<SpeechSynthesisUtterance | null>(null);
   const savedRef         = useRef(false);
+  const responseLenRef   = useRef(responseLength);
+  responseLenRef.current = responseLength;
 
   const save = useSaveConversation();
   const saveMutationRef  = useRef(save);
@@ -76,7 +89,7 @@ export function useVoicePipeline(
   const transcribeMutation = useTranscribeAudio();
   const chatMutation       = useSendChat();
 
-  // Cleanup on unmount — save once
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       safeCancel();
@@ -101,21 +114,21 @@ export function useVoicePipeline(
       safeCancel();
 
       const utter = new SpeechSynthesisUtterance(text);
-      utter.rate  = Math.max(0.7, Math.min(1.6, speed));
-      utter.pitch = 1.0;
+      utter.rate   = Math.max(0.7, Math.min(1.6, speed));
+      utter.pitch  = 1.0;
       utter.volume = 1.0;
+      utter.lang   = 'es-MX';
 
       const applyVoice = () => {
         const voice = getBestVoice();
         if (voice) utter.voice = voice;
       };
       if (window.speechSynthesis.getVoices().length === 0) {
-        window.speechSynthesis.onvoiceschanged = () => { applyVoice(); };
+        window.speechSynthesis.onvoiceschanged = applyVoice;
       } else {
         applyVoice();
       }
 
-      speechRef.current = utter;
       setStatus('speaking');
 
       let t = 0;
@@ -125,7 +138,6 @@ export function useVoicePipeline(
         setSpeakingVolume(wave);
         animFrameRef.current = requestAnimationFrame(animateMouth);
       };
-
       utter.onstart = () => {
         if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
         animateMouth();
@@ -141,15 +153,15 @@ export function useVoicePipeline(
 
       utter.onend   = finish;
       utter.onerror = finish;
-
       if (hasSpeech()) window.speechSynthesis.speak(utter);
       else finish();
     });
   }, [setStatus, setSpeakingVolume]);
 
-  // ─── Process audio blob ─────────────────────────────────────────────────
+  // ─── Process audio blob ──────────────────────────────────────────────────
   const handleAudioBlob = useCallback(async (blob: Blob) => {
     setIsProcessing(true);
+    setLastError(null);
     setStatus('thinking');
 
     try {
@@ -166,20 +178,19 @@ export function useVoicePipeline(
         return;
       }
       setLastTranscript(userText);
-
-      // Mark session start on first message
       setSessionStart(prev => prev ?? Date.now());
 
       const userMsg: ChatMessage = { role: 'user' as const, content: userText };
       const updatedHistory = [...historyRef.current, userMsg];
       setHistory(updatedHistory);
 
+      // Append length instruction to system prompt
+      const basePrompt  = settingsRef.current?.systemPrompt ?? undefined;
+      const lengthExtra = LENGTH_INSTRUCTION[responseLenRef.current];
+      const finalPrompt = basePrompt ? basePrompt + lengthExtra : undefined;
+
       const chatRes = await chatMutation.mutateAsync({
-        data: {
-          message: userText,
-          history: historyRef.current,
-          systemPrompt: settingsRef.current?.systemPrompt ?? undefined,
-        },
+        data: { message: userText, history: historyRef.current, systemPrompt: finalPrompt },
       });
 
       const aiMsg: ChatMessage = { role: 'assistant' as const, content: chatRes.message };
@@ -191,7 +202,10 @@ export function useVoicePipeline(
 
     } catch (err) {
       console.error('Pipeline error:', err);
-      toast({ title: 'Error', description: 'Algo salió mal. Intenta de nuevo.', variant: 'destructive' });
+      vibrateError();
+      const msg = 'Algo salió mal. Intenta de nuevo.';
+      setLastError(msg);
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
       setStatus('idle');
       setIsProcessing(false);
     }
@@ -200,18 +214,12 @@ export function useVoicePipeline(
   // ─── Stop recording ──────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
     if (!mediaRecorderRef.current) return;
-
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
+    if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
     if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      audioStreamRef.current.getTracks().forEach(t => t.stop());
       audioStreamRef.current = null;
     }
-    if (mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
+    if (mediaRecorderRef.current.state === 'recording') mediaRecorderRef.current.stop();
     analyserRef.current = null;
     setIsRecording(false);
   }, []);
@@ -220,14 +228,13 @@ export function useVoicePipeline(
   const startRecording = useCallback(async () => {
     safeCancel();
     setStatus('listening');
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
 
-      // Analyser for waveform visualisation
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const ctx = new AudioCtx();
+      const AudioCtxClass = window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AudioCtxClass();
       audioCtxRef.current = ctx;
       const source   = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
@@ -236,7 +243,9 @@ export function useVoicePipeline(
       analyserRef.current = analyser;
 
       const chunks: Blob[] = [];
-      const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '' });
+      const recorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '',
+      });
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
@@ -249,20 +258,19 @@ export function useVoicePipeline(
 
     } catch (err) {
       console.error('Mic error:', err);
+      vibrateError();
       toast({
         title: 'Error de micrófono',
         description: 'No se pudo acceder al micrófono. Permite el acceso e intenta de nuevo.',
         variant: 'destructive',
       });
+      setStatus('idle');
     }
-  }, [handleAudioBlob, setStatus, setSpeakingVolume, toast]);
+  }, [handleAudioBlob, setStatus, toast]);
 
   // ─── Interrupt AI speech ─────────────────────────────────────────────────
   const interruptSpeech = useCallback(() => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
+    if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
     setSpeakingVolume(0);
     safeCancel();
     setStatus('idle');
@@ -275,6 +283,7 @@ export function useVoicePipeline(
     setLastTranscript('');
     setTokensTotal(0);
     setSessionStart(null);
+    setLastError(null);
     savedRef.current = false;
   }, [interruptSpeech]);
 
@@ -283,7 +292,7 @@ export function useVoicePipeline(
     const msgs = historyRef.current;
     if (msgs.length > 0) {
       savedRef.current = true;
-      const title = msgs[0]?.content?.slice(0, 40) || `Chat ${new Date().toLocaleDateString('es-MX')}`;
+      const title = msgs[0]?.content?.slice(0, 50) || `Chat ${new Date().toLocaleDateString('es-MX')}`;
       save.mutate({ data: { title, messages: msgs } });
       toast({ title: 'Conversación guardada', description: 'Registrada en el historial.' });
     } else {
@@ -292,17 +301,11 @@ export function useVoicePipeline(
   }, [save, toast]);
 
   return {
-    startRecording,
-    stopRecording,
-    interruptSpeech,
-    resetConversation,
-    saveConversation,
-    isRecording,
-    isProcessing,
-    history,
-    lastTranscript,
-    tokensTotal,
-    sessionStart,
+    startRecording, stopRecording, interruptSpeech, resetConversation, saveConversation,
+    isRecording, isProcessing,
+    history, lastTranscript, lastError,
+    tokensTotal, sessionStart,
+    responseLength, setResponseLength,
     analyser: analyserRef.current,
   };
 }

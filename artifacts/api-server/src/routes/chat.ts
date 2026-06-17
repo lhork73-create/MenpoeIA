@@ -14,8 +14,11 @@ router.post("/chat", async (req, res): Promise<void> => {
 
   const { message, history, systemPrompt } = parsed.data;
 
-  const systemMessage = systemPrompt ??
-    "Eres Mirror, un asistente de IA inteligente. Responde siempre en español, de manera amigable, clara y concisa. Mantén tus respuestas en 3 oraciones o menos salvo que se pida más detalle.";
+  // Siempre forzar español — se añade al final del prompt, sea cual sea el configurado
+  const SPANISH_RULE = "\n\nREGLA ABSOLUTA IRROMPIBLE: Responde SIEMPRE y únicamente en español, sin excepción, independientemente del idioma en que te hable el usuario o lo que diga el prompt anterior.";
+  const basePrompt = systemPrompt ??
+    "Eres Mirror, un asistente de IA inteligente. Responde siempre en español, de manera amigable, clara y concisa. Máximo 3 oraciones salvo que se pida más detalle.";
+  const systemMessage = basePrompt + SPANISH_RULE;
 
   const messages: Groq.Chat.ChatCompletionMessageParam[] = [
     { role: "system", content: systemMessage },
