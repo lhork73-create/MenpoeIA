@@ -18,8 +18,13 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
+// Safe helpers — speechSynthesis may be undefined in iframes / some browsers
+const hasSpeech = () => typeof window !== 'undefined' && 'speechSynthesis' in window && !!window.speechSynthesis;
+const safeCancel = () => { if (hasSpeech()) window.speechSynthesis.cancel(); };
+
 // Select the best available browser TTS voice (prefer natural/neural/online)
 const getBestVoice = (): SpeechSynthesisVoice | null => {
+  if (!hasSpeech()) return null;
   const voices = window.speechSynthesis.getVoices();
   const checks: ((v: SpeechSynthesisVoice) => boolean)[] = [
     (v) => /neural|natural/i.test(v.name) && v.lang.startsWith('en'),
@@ -72,7 +77,7 @@ export function useVoicePipeline(
   // Cleanup on unmount — save once
   useEffect(() => {
     return () => {
-      window.speechSynthesis.cancel();
+      safeCancel();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
         audioCtxRef.current.close();
@@ -90,9 +95,9 @@ export function useVoicePipeline(
   // ─── TTS with browser SpeechSynthesis ─────────────────────────────────────
   const speak = useCallback((text: string, speed: number): Promise<void> => {
     return new Promise((resolve) => {
-      if (!('speechSynthesis' in window)) { resolve(); return; }
+      if (!hasSpeech()) { resolve(); return; }
 
-      window.speechSynthesis.cancel();
+      safeCancel();
 
       const utter = new SpeechSynthesisUtterance(text);
       utter.rate = Math.max(0.7, Math.min(1.6, speed));
@@ -140,7 +145,8 @@ export function useVoicePipeline(
       utter.onend = finish;
       utter.onerror = finish;
 
-      window.speechSynthesis.speak(utter);
+      if (hasSpeech()) window.speechSynthesis.speak(utter);
+      else finish();
     });
   }, [setStatus, setSpeakingVolume]);
 
@@ -221,7 +227,7 @@ export function useVoicePipeline(
   // ─── Start recording: opens mic, NO auto-stop ──────────────────────────────
   const startRecording = useCallback(async () => {
     // If AI is speaking, interrupt it
-    window.speechSynthesis.cancel();
+    safeCancel();
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
