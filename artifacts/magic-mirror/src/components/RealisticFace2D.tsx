@@ -114,7 +114,15 @@ export function RealisticFace2D({
       const skinShadow= isFemale ? '#A06040' : '#8A5030';
       const lipColor  = isFemale ? '#C06070' : '#A05548';
       const hairColor = isFemale ? '#1C0C06' : '#1A1008';
-      const eyeColor  = isFemale ? '#5B8A6E' : '#4A6A88';
+      // Eye color changes with status
+      const eyeColorMap: Record<string, string> = {
+        listening: '#00D4AA',  // teal
+        speaking:  '#4499FF',  // blue
+        thinking:  '#AA66FF',  // violet
+        idle:      isFemale ? '#5B8A6E' : '#4A6A88', // calm green/blue
+        error:     '#FF5555',
+      };
+      const eyeColor = eyeColorMap[status] ?? eyeColorMap.idle;
 
       // Face size
       const FW = 120 * sc, FH = 150 * sc;

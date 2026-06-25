@@ -14,9 +14,7 @@ export class WebGLErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.warn('[Avatar] WebGL not available, using 2D fallback:', error.message);
-    }
+    console.warn('[Avatar] 3D unavailable, switching to 2D portrait:', error.message);
   }
 
   render() {
@@ -25,14 +23,23 @@ export class WebGLErrorBoundary extends Component<Props, State> {
   }
 }
 
-/** Returns false if WebGL is unavailable (headless / old device / blocked) */
+/**
+ * Tests actual WebGL context creation with the same attributes Three.js uses.
+ * More reliable than just checking `window.WebGLRenderingContext`.
+ */
 export function isWebGLAvailable(): boolean {
   try {
     const canvas = document.createElement('canvas');
-    return !!(
-      window.WebGLRenderingContext &&
-      (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
-    );
+    const ctx = (
+      canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false }) ||
+      canvas.getContext('webgl',  { failIfMajorPerformanceCaveat: false }) ||
+      canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: false })
+    ) as WebGLRenderingContext | null;
+    if (!ctx) return false;
+    if (ctx.isContextLost()) return false;
+    // Verify we can actually use it
+    ctx.getParameter(ctx.VERSION);
+    return true;
   } catch {
     return false;
   }

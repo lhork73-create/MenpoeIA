@@ -15,6 +15,16 @@ const LEE_URL     = '/models/LeePerrySmith.glb';
 useGLTF.preload(FACECAP_URL);
 useGLTF.preload(LEE_URL);
 
+// ── Eye color per status ──────────────────────────────────────────────────────
+function eyeColor(status: AvatarStatus): THREE.Color {
+  switch (status) {
+    case 'listening': return new THREE.Color('#00D4AA'); // teal
+    case 'speaking':  return new THREE.Color('#4499FF'); // blue
+    case 'thinking':  return new THREE.Color('#AA66FF'); // violet
+    default:          return new THREE.Color('#5B8A6E'); // calm green
+  }
+}
+
 // ── Morph helper ─────────────────────────────────────────────────────────────
 function lerpMorph(
   influences: number[],
@@ -66,12 +76,6 @@ function FemaleHair() {
         <sphereGeometry args={[0.081, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.38]} />
         <meshStandardMaterial color="#231208" roughness={0.82} metalness={0.04} />
       </mesh>
-      {[-0.045, -0.015, 0.015, 0.045].map((x, i) => (
-        <mesh key={i} position={[x, 0.036, 0.089]} rotation={[0.35, x * 0.5, 0]}>
-          <capsuleGeometry args={[0.009, 0.028, 4, 8]} />
-          <meshStandardMaterial color={dark} roughness={0.9} />
-        </mesh>
-      ))}
       <mesh position={[-0.093, 0.0, 0.04]} rotation={[0.1, 0.4, -0.3]}>
         <capsuleGeometry args={[0.018, 0.075, 8, 12]} />
         <meshStandardMaterial color={dark} roughness={0.88} side={THREE.DoubleSide} />
@@ -92,14 +96,14 @@ function FemaleHair() {
 interface FaceProps {
   status: AvatarStatus;
   mouthOpenAmount: number;
-  theme?: ThemeColors;
 }
 
 function FemaleHead({ status, mouthOpenAmount }: FaceProps) {
-  const { scene } = useGLTF(FACECAP_URL);
-  const meshRef   = useRef<THREE.Mesh | null>(null);
-  const groupRef  = useRef<THREE.Group>(null!);
-  const blink     = useRef({ v: 0, timer: 3 + Math.random() * 4, phase: false });
+  const { scene }  = useGLTF(FACECAP_URL);
+  const meshRef    = useRef<THREE.Mesh | null>(null);
+  const groupRef   = useRef<THREE.Group>(null!);
+  const eyeMatRef  = useRef<THREE.MeshStandardMaterial | null>(null);
+  const blink      = useRef({ v: 0, timer: 3 + Math.random() * 4, phase: false });
 
   useEffect(() => {
     const clone = scene.clone(true);
@@ -112,6 +116,7 @@ function FemaleHead({ status, mouthOpenAmount }: FaceProps) {
           node.material.roughness = 0.65;
           node.material.metalness = 0.0;
           node.material.needsUpdate = true;
+          eyeMatRef.current = node.material;
         }
       }
     });
@@ -129,18 +134,25 @@ function FemaleHead({ status, mouthOpenAmount }: FaceProps) {
     if (group) {
       group.rotation.y = Math.sin(t * 0.22) * 0.04 + Math.sin(t * 0.09) * 0.015;
       group.rotation.x = Math.sin(t * 0.16) * 0.012;
-      group.rotation.z = status === 'listening'
-        ? THREE.MathUtils.lerp(group.rotation.z, Math.sin(t * 0.4) * 0.025, 0.05)
-        : THREE.MathUtils.lerp(group.rotation.z, 0, 0.03);
+    }
+
+    // Eye emissive color based on status
+    if (eyeMatRef.current) {
+      const target = eyeColor(status);
+      eyeMatRef.current.emissive.lerp(target, 0.05);
+      const targetIntensity = status === 'idle' ? 0.05 : 0.35;
+      eyeMatRef.current.emissiveIntensity = THREE.MathUtils.lerp(
+        eyeMatRef.current.emissiveIntensity, targetIntensity, 0.06,
+      );
     }
 
     if (!mesh?.morphTargetInfluences || !mesh.morphTargetDictionary) return;
     const infl = mesh.morphTargetInfluences;
     const dict = mesh.morphTargetDictionary;
 
-    lerpMorph(infl, dict, 'jawOpen',     status === 'speaking' ? Math.max(0, mouthOpenAmount * 0.85) : 0, 0.18);
-    lerpMorph(infl, dict, 'mouthSmileLeft',  status === 'idle' ? 0.14 : 0.05, 0.04);
-    lerpMorph(infl, dict, 'mouthSmileRight', status === 'idle' ? 0.14 : 0.05, 0.04);
+    lerpMorph(infl, dict, 'jawOpen',          status === 'speaking' ? Math.max(0, mouthOpenAmount * 0.85) : 0, 0.18);
+    lerpMorph(infl, dict, 'mouthSmileLeft',   status === 'idle' ? 0.14 : 0.05, 0.04);
+    lerpMorph(infl, dict, 'mouthSmileRight',  status === 'idle' ? 0.14 : 0.05, 0.04);
 
     blink.current.timer -= delta;
     if (!blink.current.phase && blink.current.timer < 0) {
@@ -154,9 +166,9 @@ function FemaleHead({ status, mouthOpenAmount }: FaceProps) {
     lerpMorph(infl, dict, 'eyeBlinkLeft',  blink.current.v, 1);
     lerpMorph(infl, dict, 'eyeBlinkRight', blink.current.v, 1);
 
-    lerpMorph(infl, dict, 'browInnerUp',    status === 'thinking' ? 0.45 : 0, 0.04);
-    lerpMorph(infl, dict, 'browDownLeft',   status === 'thinking' ? 0.20 : 0, 0.04);
-    lerpMorph(infl, dict, 'browDownRight',  status === 'thinking' ? 0.20 : 0, 0.04);
+    lerpMorph(infl, dict, 'browInnerUp',      status === 'thinking' ? 0.45 : 0, 0.04);
+    lerpMorph(infl, dict, 'browDownLeft',     status === 'thinking' ? 0.20 : 0, 0.04);
+    lerpMorph(infl, dict, 'browDownRight',    status === 'thinking' ? 0.20 : 0, 0.04);
     lerpMorph(infl, dict, 'browOuterUpLeft',  status === 'listening' ? 0.28 : 0, 0.04);
     lerpMorph(infl, dict, 'browOuterUpRight', status === 'listening' ? 0.28 : 0, 0.04);
 
@@ -175,18 +187,20 @@ function FemaleHead({ status, mouthOpenAmount }: FaceProps) {
   );
 }
 
-// ── Male face (Lee Perry Smith photorealistic scan) ──────────────────────────
+// ── Male face (Lee Perry Smith scan) ─────────────────────────────────────────
 function MaleHead({ status }: FaceProps) {
-  const { scene }  = useGLTF(LEE_URL);
-  const groupRef   = useRef<THREE.Group>(null!);
+  const { scene } = useGLTF(LEE_URL);
+  const groupRef  = useRef<THREE.Group>(null!);
+  const matRef    = useRef<THREE.MeshStandardMaterial | null>(null);
 
   useEffect(() => {
     scene.traverse((node) => {
       if (node instanceof THREE.Mesh && node.material instanceof THREE.MeshStandardMaterial) {
         node.material = node.material.clone();
-        node.material.roughness = 0.55;
-        node.material.metalness = 0.0;
+        node.material.roughness  = 0.55;
+        node.material.metalness  = 0.0;
         node.material.needsUpdate = true;
+        matRef.current = node.material;
       }
     });
   }, [scene]);
@@ -196,6 +210,14 @@ function MaleHead({ status }: FaceProps) {
     if (groupRef.current) {
       groupRef.current.rotation.y = Math.sin(t * 0.22) * 0.05;
       groupRef.current.rotation.x = Math.sin(t * 0.15) * 0.018;
+    }
+    if (matRef.current) {
+      const target = eyeColor(status);
+      matRef.current.emissive.lerp(target, 0.04);
+      const targetIntensity = status === 'idle' ? 0.02 : 0.25;
+      matRef.current.emissiveIntensity = THREE.MathUtils.lerp(
+        matRef.current.emissiveIntensity, targetIntensity, 0.06,
+      );
     }
   });
 
@@ -210,7 +232,6 @@ function MaleHead({ status }: FaceProps) {
 function StatusRings({ status, theme }: { status: AvatarStatus; theme?: ThemeColors }) {
   const r1 = useRef<THREE.Mesh>(null!);
   const r2 = useRef<THREE.Mesh>(null!);
-  const pr = theme?.particleR ?? 0, pg = theme?.particleG ?? 175, pb = theme?.particleB ?? 255;
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime();
@@ -224,33 +245,33 @@ function StatusRings({ status, theme }: { status: AvatarStatus; theme?: ThemeCol
     }
   });
 
-  const color  = new THREE.Color(`rgb(${pr},${pg},${pb})`);
+  const pr = theme?.particleR ?? 0, pg = theme?.particleG ?? 175, pb = theme?.particleB ?? 255;
+  const ringCol = new THREE.Color(`rgb(${pr},${pg},${pb})`);
   const a1 = status === 'speaking' ? 0.55 : status === 'listening' ? 0.62 : status === 'thinking' ? 0.38 : 0.22;
 
   return (
     <>
       <mesh ref={r1}>
         <torusGeometry args={[1.55, 0.008, 8, 96]} />
-        <meshBasicMaterial color={color} transparent opacity={a1} />
+        <meshBasicMaterial color={ringCol} transparent opacity={a1} />
       </mesh>
       <mesh ref={r2} rotation={[0.4, 0, 0]}>
         <torusGeometry args={[1.75, 0.004, 6, 80]} />
-        <meshBasicMaterial color={color} transparent opacity={a1 * 0.5} />
+        <meshBasicMaterial color={ringCol} transparent opacity={a1 * 0.5} />
       </mesh>
     </>
   );
 }
 
-// ── Loading skeleton (while GLB loads) ───────────────────────────────────────
+// ── Loading skeleton ──────────────────────────────────────────────────────────
 function LoadingSkeleton({ theme }: { theme?: ThemeColors }) {
   const ref = useRef<THREE.Mesh>(null!);
   const pr = theme?.particleR ?? 0, pg = theme?.particleG ?? 175, pb = theme?.particleB ?? 255;
 
   useFrame((state) => {
-    const t = state.clock.getElapsedTime();
     if (ref.current) {
-      const mat = ref.current.material as THREE.MeshBasicMaterial;
-      mat.opacity = 0.12 + Math.sin(t * 2.5) * 0.08;
+      const t = state.clock.getElapsedTime();
+      (ref.current.material as THREE.MeshBasicMaterial).opacity = 0.12 + Math.sin(t * 2.5) * 0.08;
     }
   });
 
@@ -260,6 +281,21 @@ function LoadingSkeleton({ theme }: { theme?: ThemeColors }) {
       <meshBasicMaterial color={new THREE.Color(`rgb(${pr},${pg},${pb})`)} transparent opacity={0.12} wireframe />
     </mesh>
   );
+}
+
+// ── Dynamic eye point light ───────────────────────────────────────────────────
+function EyeLight({ status }: { status: AvatarStatus }) {
+  const lightRef = useRef<THREE.PointLight>(null!);
+
+  useFrame(() => {
+    if (!lightRef.current) return;
+    const target = eyeColor(status);
+    lightRef.current.color.lerp(target, 0.06);
+    const targetIntensity = status === 'idle' ? 0.2 : status === 'thinking' ? 0.6 : 0.8;
+    lightRef.current.intensity = THREE.MathUtils.lerp(lightRef.current.intensity, targetIntensity, 0.06);
+  });
+
+  return <pointLight ref={lightRef} position={[0, 0.5, 2]} intensity={0.2} />;
 }
 
 // ── 3D Canvas scene ───────────────────────────────────────────────────────────
@@ -274,31 +310,30 @@ function ThreeDScene({ status, mouthOpenAmount, gender, theme }: SceneProps) {
   const camZ = gender === 'female' ? 0.72 : 2.85;
 
   return (
-    <Canvas
-      camera={{ position: [0, 0, camZ], fov: 42 }}
-      gl={{ antialias: true, alpha: true, failIfMajorPerformanceCaveat: false }}
-      style={{ background: 'transparent', width: '100%', height: '100%' }}
-      dpr={[1, 1.5]}
-    >
-      <CameraLookAt />
-      <ambientLight intensity={0.4} />
-      <directionalLight position={[-2.5, 4, 5]}  intensity={2.8}  color="#FFF4E0" />
-      <directionalLight position={[3.5, 1.5, 2]} intensity={0.9}  color="#C0D0FF" />
-      <directionalLight position={[0, -1, -5]}   intensity={0.6}  color="#FFE0C0" />
-      <directionalLight position={[0, 6, 0]}     intensity={0.35} />
-      <pointLight
-        position={[0, 2, 3]} intensity={0.4}
-        color={`rgb(${theme?.particleR ?? 0},${theme?.particleG ?? 175},${theme?.particleB ?? 255})`}
-      />
-      <Suspense fallback={<LoadingSkeleton theme={theme} />}>
-        {gender === 'female'
-          ? <FemaleHead status={status} mouthOpenAmount={mouthOpenAmount} />
-          : <MaleHead   status={status} mouthOpenAmount={mouthOpenAmount} />
-        }
-        <Environment preset="studio" background={false} />
-      </Suspense>
-      <StatusRings status={status} theme={theme} />
-    </Canvas>
+    <div style={{ position: 'absolute', inset: 0 }}>
+      <Canvas
+        camera={{ position: [0, 0, camZ], fov: 42 }}
+        gl={{ antialias: true, alpha: true, failIfMajorPerformanceCaveat: false }}
+        style={{ background: 'transparent', width: '100%', height: '100%' }}
+        dpr={[1, 1.5]}
+      >
+        <CameraLookAt />
+        <ambientLight intensity={0.4} />
+        <directionalLight position={[-2.5, 4, 5]}  intensity={2.8} color="#FFF4E0" />
+        <directionalLight position={[3.5, 1.5, 2]} intensity={0.9} color="#C0D0FF" />
+        <directionalLight position={[0, -1, -5]}   intensity={0.6} color="#FFE0C0" />
+        <directionalLight position={[0, 6, 0]}     intensity={0.35} />
+        <EyeLight status={status} />
+        <Suspense fallback={<LoadingSkeleton theme={theme} />}>
+          {gender === 'female'
+            ? <FemaleHead status={status} mouthOpenAmount={mouthOpenAmount} />
+            : <MaleHead   status={status} mouthOpenAmount={mouthOpenAmount} />
+          }
+          <Environment preset="studio" background={false} />
+        </Suspense>
+        <StatusRings status={status} theme={theme} />
+      </Canvas>
+    </div>
   );
 }
 
@@ -314,7 +349,6 @@ export interface RealisticFaceAvatarProps {
 export function RealisticFaceAvatar({
   status, mouthOpenAmount, micLevel = 0, gender = 'female', theme,
 }: RealisticFaceAvatarProps) {
-  // Detect WebGL support upfront — avoids a flash of error before boundary catches
   const [webglOk] = useState(() => isWebGLAvailable());
 
   const fallback2D = (
@@ -330,13 +364,15 @@ export function RealisticFaceAvatar({
   if (!webglOk) return fallback2D;
 
   return (
-    <WebGLErrorBoundary fallback={fallback2D}>
-      <ThreeDScene
-        status={status}
-        mouthOpenAmount={mouthOpenAmount}
-        gender={gender}
-        theme={theme}
-      />
-    </WebGLErrorBoundary>
+    <div style={{ position: 'absolute', inset: 0 }}>
+      <WebGLErrorBoundary fallback={fallback2D}>
+        <ThreeDScene
+          status={status}
+          mouthOpenAmount={mouthOpenAmount}
+          gender={gender}
+          theme={theme}
+        />
+      </WebGLErrorBoundary>
+    </div>
   );
 }
