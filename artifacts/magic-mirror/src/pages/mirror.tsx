@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Avatar, AvatarMode, AvatarGender } from '@/components/Avatar';
+import { Avatar, AvatarGender } from '@/components/Avatar';
 import { VoiceControl } from '@/components/VoiceControl';
 import { TranscriptPanel } from '@/components/TranscriptPanel';
 import { ParticleBackground } from '@/components/ParticleBackground';
@@ -15,7 +15,7 @@ import { Link } from 'wouter';
 import {
   Settings, History, RotateCcw, Save, StopCircle,
   Palette, Share2, AlignLeft, AlignCenter, AlignJustify,
-  Download, Gauge, Volume2, Sparkles, User, UserRound,
+  Download, Gauge, Volume2, User, UserRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { vibrateStart } from '@/lib/haptic';
@@ -28,9 +28,8 @@ const LENGTH_ICONS: Record<ResponseLength, React.ReactNode> = {
 };
 const LENGTHS: ResponseLength[] = ['corta', 'media', 'larga'];
 
-// Persist avatar mode + gender across sessions
-const getStoredMode   = (): AvatarMode   => (localStorage.getItem('avatarMode')   as AvatarMode)   || 'particle';
-const getStoredGender = (): AvatarGender => (localStorage.getItem('avatarGender') as AvatarGender) || 'female';
+const getStoredGender = (): AvatarGender =>
+  (localStorage.getItem('avatarGender') as AvatarGender) || 'female';
 
 export default function MirrorPage() {
   const { toast } = useToast();
@@ -52,15 +51,9 @@ export default function MirrorPage() {
   const [handsFree,        setHandsFree]        = useState(false);
   const [showThemePicker,  setShowThemePicker]  = useState(false);
   const [showSpeedPanel,   setShowSpeedPanel]   = useState(false);
-  const [showAvatarPanel,  setShowAvatarPanel]  = useState(false);
   const [micLevel,         setMicLevel]         = useState(0);
-  const [avatarMode,       setAvatarModeState]  = useState<AvatarMode>(getStoredMode);
   const [avatarGender,     setAvatarGenderState]= useState<AvatarGender>(getStoredGender);
 
-  const setAvatarMode = (m: AvatarMode) => {
-    setAvatarModeState(m);
-    localStorage.setItem('avatarMode', m);
-  };
   const setAvatarGender = (g: AvatarGender) => {
     setAvatarGenderState(g);
     localStorage.setItem('avatarGender', g);
@@ -145,9 +138,9 @@ export default function MirrorPage() {
     if (navigator.share) {
       navigator.share({ title: 'Mirror AI', text: last }).catch(() => {});
     } else {
-      navigator.clipboard.writeText(last).then(() =>
-        toast({ title: 'Copiado al portapapeles ✓' })
-      ).catch(() => {});
+      navigator.clipboard.writeText(last)
+        .then(() => toast({ title: 'Copiado al portapapeles ✓' }))
+        .catch(() => {});
     }
   }, [history, toast]);
 
@@ -211,80 +204,32 @@ export default function MirrorPage() {
       </div>
 
       {/* ── Toolbar derecha ── */}
-      <div className="absolute top-4 right-[4.5rem] z-50 flex items-center gap-2 flex-wrap justify-end">
+      <div className="absolute top-4 right-16 z-50 flex items-center gap-1.5 flex-wrap justify-end">
 
-        {/* Avatar mode + gender picker */}
-        <div className="relative">
-          <Button variant="ghost" size="icon"
-            onClick={() => setShowAvatarPanel(v => !v)}
-            title="Tipo de avatar"
-            className={`rounded-full bg-background/20 backdrop-blur-md border w-10 h-10 transition-all ${
-              avatarMode === 'realistic'
-                ? 'border-primary/60 text-primary bg-primary/10'
-                : 'border-white/10 text-white/60 hover:text-white hover:bg-white/15'
+        {/* Gender toggle */}
+        <div className="flex rounded-full border border-white/10 overflow-hidden bg-black/30 backdrop-blur-md">
+          <button
+            onClick={() => setAvatarGender('female')}
+            title="Avatar femenino"
+            className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono transition-all ${
+              avatarGender === 'female'
+                ? 'bg-pink-500/25 text-pink-300 border-r border-pink-500/20'
+                : 'text-white/35 hover:text-white/70 hover:bg-white/5 border-r border-white/10'
             }`}>
-            <Sparkles className="w-4 h-4" />
-          </Button>
-          <AnimatePresence>
-            {showAvatarPanel && (
-              <motion.div
-                initial={{ opacity: 0, y: -6, scale: 0.94 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -6, scale: 0.94 }}
-                className="absolute top-12 right-0 glass-panel rounded-2xl p-4 border border-white/10 shadow-xl w-56 z-50">
-                <p className="text-[10px] font-mono uppercase text-primary/70 mb-3 tracking-wider flex items-center gap-1.5">
-                  <Sparkles className="w-3 h-3" /> Avatar
-                </p>
-
-                {/* Mode toggle */}
-                <div className="flex rounded-xl overflow-hidden border border-white/10 mb-3">
-                  {(['particle', 'realistic'] as AvatarMode[]).map(m => (
-                    <button key={m}
-                      onClick={() => { setAvatarMode(m); if (m === 'realistic') setShowAvatarPanel(false); }}
-                      className={`flex-1 py-2 text-[11px] font-mono transition-all ${
-                        avatarMode === m ? 'bg-primary/30 text-primary' : 'text-white/40 hover:text-white/70'
-                      }`}>
-                      {m === 'particle' ? '✦ Partículas' : '◉ Realista'}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Gender (only for realistic) */}
-                <AnimatePresence>
-                  {avatarMode === 'realistic' && (
-                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
-                      <p className="text-[10px] font-mono uppercase text-white/40 mb-2 tracking-wider">Género</p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setAvatarGender('female')}
-                          className={`flex-1 flex flex-col items-center gap-1 py-2.5 rounded-xl border transition-all text-xs font-mono ${
-                            avatarGender === 'female'
-                              ? 'border-pink-400/60 bg-pink-500/15 text-pink-300'
-                              : 'border-white/10 text-white/40 hover:text-white/70 hover:bg-white/5'
-                          }`}>
-                          <UserRound className="w-5 h-5" />
-                          <span>Mujer</span>
-                        </button>
-                        <button
-                          onClick={() => setAvatarGender('male')}
-                          className={`flex-1 flex flex-col items-center gap-1 py-2.5 rounded-xl border transition-all text-xs font-mono ${
-                            avatarGender === 'male'
-                              ? 'border-blue-400/60 bg-blue-500/15 text-blue-300'
-                              : 'border-white/10 text-white/40 hover:text-white/70 hover:bg-white/5'
-                          }`}>
-                          <User className="w-5 h-5" />
-                          <span>Hombre</span>
-                        </button>
-                      </div>
-                      <p className="text-[9px] text-white/25 mt-2 text-center font-mono">
-                        Cargando modelo 3D…
-                      </p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-            )}
-          </AnimatePresence>
+            <UserRound className="w-3.5 h-3.5" />
+            <span>Mujer</span>
+          </button>
+          <button
+            onClick={() => setAvatarGender('male')}
+            title="Avatar masculino"
+            className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono transition-all ${
+              avatarGender === 'male'
+                ? 'bg-blue-500/25 text-blue-300'
+                : 'text-white/35 hover:text-white/70 hover:bg-white/5'
+            }`}>
+            <User className="w-3.5 h-3.5" />
+            <span>Hombre</span>
+          </button>
         </div>
 
         {/* Longitud de respuesta */}
@@ -292,6 +237,8 @@ export default function MirrorPage() {
           {LENGTHS.map(len => (
             <button key={len} onClick={() => setResponseLength(len)} title={`Respuesta ${len}`}
               className={`flex items-center gap-1 px-2.5 py-2 text-[10px] font-mono transition-all ${
+                len !== 'corta' ? 'border-l border-white/10' : ''
+              } ${
                 responseLength === len ? 'bg-primary/30 text-primary' : 'text-white/35 hover:text-white/70 hover:bg-white/5'
               }`}>
               {LENGTH_ICONS[len]}
@@ -303,7 +250,7 @@ export default function MirrorPage() {
         {/* Velocidad TTS */}
         <div className="relative">
           <Button variant="ghost" size="icon"
-            onClick={() => setShowSpeedPanel(v => !v)}
+            onClick={() => { setShowSpeedPanel(v => !v); setShowThemePicker(false); }}
             className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Velocidad de voz">
             <Gauge className="w-4 h-4" />
           </Button>
@@ -353,7 +300,8 @@ export default function MirrorPage() {
 
         {/* Tema */}
         <div className="relative">
-          <Button variant="ghost" size="icon" onClick={() => setShowThemePicker(v => !v)}
+          <Button variant="ghost" size="icon"
+            onClick={() => { setShowThemePicker(v => !v); setShowSpeedPanel(false); }}
             className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Tema">
             <Palette className="w-4 h-4" />
           </Button>
@@ -376,7 +324,7 @@ export default function MirrorPage() {
         </div>
       </div>
 
-      {/* Nombre del avatar */}
+      {/* Nombre + género */}
       <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none text-center">
         <motion.p key={avatarName}
           initial={{ opacity: 0, letterSpacing: '0.6em' }}
@@ -385,15 +333,13 @@ export default function MirrorPage() {
           className="text-xs font-mono uppercase text-primary">
           {avatarName}
         </motion.p>
-        {avatarMode === 'realistic' && (
-          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 0.25 }}
-            className="text-[9px] font-mono uppercase text-white/30 tracking-widest mt-0.5">
-            {avatarGender === 'female' ? '♀ Mujer · 3D' : '♂ Hombre · 3D'}
-          </motion.p>
-        )}
+        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 0.22 }}
+          className="text-[9px] font-mono uppercase text-white/30 tracking-widest mt-0.5">
+          {avatarGender === 'female' ? '♀ Femenino · 3D' : '♂ Masculino · 3D'}
+        </motion.p>
       </div>
 
-      {/* ── Avatar ── */}
+      {/* ── Avatar 3D ── */}
       <div
         className="absolute inset-0 flex items-center justify-center z-10"
         onClick={handleAvatarTap}
@@ -401,13 +347,12 @@ export default function MirrorPage() {
         <motion.div className="w-full h-full flex items-center justify-center"
           initial={{ opacity: 0, scale: 0.88 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 2, ease: 'easeOut' }}>
+          transition={{ duration: 1.8, ease: 'easeOut' }}>
           <Avatar
             status={status}
             mouthOpenAmount={mouthOpenAmount}
             micLevel={micLevel}
             theme={theme}
-            mode={avatarMode}
             gender={avatarGender}
           />
         </motion.div>
@@ -418,7 +363,7 @@ export default function MirrorPage() {
         <ThinkingIndicator active={status === 'thinking'} />
       </div>
 
-      {/* Botón interrumpir */}
+      {/* Interrumpir */}
       <AnimatePresence>
         {status === 'speaking' && (
           <motion.div key="intr"
@@ -434,7 +379,7 @@ export default function MirrorPage() {
         )}
       </AnimatePresence>
 
-      {/* Subtítulo en vivo */}
+      {/* Subtítulo */}
       <AnimatePresence>
         {status === 'speaking' && lastAiMsg && (
           <motion.div key="cap"
