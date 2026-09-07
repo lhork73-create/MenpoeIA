@@ -52,6 +52,24 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+export function unlockAudio() {
+  try {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    }
+    const AudioCtxClass = window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (AudioCtxClass) {
+      const dummyCtx = new AudioCtxClass();
+      if (dummyCtx.state === 'suspended') {
+        dummyCtx.resume().catch(() => {});
+      }
+    }
+  } catch (_) {}
+}
+
 const hasSpeech = () =>
   typeof window !== 'undefined' && 'speechSynthesis' in window;
 
@@ -134,6 +152,7 @@ export function useVoicePipeline(
   const speechRecognitionRef    = useRef<any>(null);
   const speechRecognitionTextRef = useRef<string>('');
   const chunksRef = useRef<Blob[]>([]);
+  const vadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
   const settingsRef = useRef(settings);
@@ -188,7 +207,10 @@ export function useVoicePipeline(
         animMouth();
       };
 
+      let finished = false;
       const finish = () => {
+        if (finished) return;
+        finished = true;
         if (ttsAnimRef.current) { cancelAnimationFrame(ttsAnimRef.current); ttsAnimRef.current = null; }
         setSpeakingVolume(0);
         setStatus('idle');
@@ -198,7 +220,15 @@ export function useVoicePipeline(
       utter.onend   = finish;
       utter.onerror = finish;
 
+      // Timeout de seguridad basado en la longitud del texto
+      const words = text.split(/\s+/).length;
+      const maxMs = Math.max(4000, (words / 2.2) * 1000 + 3000);
+      setTimeout(finish, maxMs);
+
       try {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
         window.speechSynthesis.speak(utter);
       } catch {
         finish();
@@ -209,6 +239,7 @@ export function useVoicePipeline(
   // ── Limpieza de audio ────────────────────────────────────────────────────
   const cleanupAudio = useCallback(() => {
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (vadTimerRef.current) { clearInterval(vadTimerRef.current); vadTimerRef.current = null; }
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach(t => t.stop());
       audioStreamRef.current = null;
@@ -294,13 +325,13 @@ export function useVoicePipeline(
       const recDuration = Date.now() - recordingStartTimeRef.current;
       console.log('[VoicePipeline] Recording duration:', recDuration, 'ms');
 
-      // Umbral reducido: 200 bytes y 300ms para no filtrar audio real corto
-      if (blob.size < 200 || recDuration < 300) {
+      // Umbral reducido: 80 bytes y 150ms para admitir respuestas breves ("Sí", "Hola", etc.)
+      if (blob.size < 80 || recDuration < 150) {
         setStatus('idle');
         setIsProcessing(false);
         toast({
-          title: 'Audio muy corto',
-          description: 'Pulsa el micrófono, habla y pulsa de nuevo para enviar.',
+          title: 'Audio muy breve',
+          description: 'Mantén pulsado o habla después de pulsar. También puedes usar el botón [T] para escribir.',
         });
         return;
       }
@@ -409,45 +440,7 @@ export function useVoicePipeline(
     setStatus('listening');
 
     try {
-      // Iniciar reconocimiento de voz nativo en tiempo real
-      speechRecognitionTextRef.current = '';
-      const SpeechRecognitionClass =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognitionClass) {
-        try {
-          const recognition = new SpeechRecognitionClass();
-          recognition.continuous = true;
-          recognition.interimResults = true;
-          recognition.lang = 'es-419';
-          recognition.maxAlternatives = 1;
-          recognition.onresult = (event: any) => {
-            let fullText = '';
-            for (let i = 0; i < event.results.length; i++) {
-              fullText += event.results[i][0].transcript;
-            }
-            if (fullText.trim()) {
-              speechRecognitionTextRef.current = fullText.trim();
-              console.log('[SpeechRecognition] interim:', fullText.trim());
-            }
-          };
-          recognition.onend = () => {
-            // SpeechRecognition puede detenerse automáticamente en iOS — reiniciar si aún se graba
-            if (isRecordingRef.current && speechRecognitionRef.current) {
-              try { speechRecognitionRef.current.start(); } catch (_) {}
-            }
-          };
-          recognition.onerror = (e: any) => {
-            console.warn('[SpeechRecognition] error:', e.error);
-          };
-          recognition.start();
-          speechRecognitionRef.current = recognition;
-        } catch (srErr) {
-          console.warn('[SpeechRecognition] failed to start:', srErr);
-        }
-      } else {
-        console.warn('[VoicePipeline] SpeechRecognition not available, will use Gemini transcription');
-      }
-
+      // 1. Obtener primero el stream de micrófono con cancelación de ruido
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -457,19 +450,51 @@ export function useVoicePipeline(
       });
       audioStreamRef.current = stream;
 
-      // Analyser para visualización
+      // 2. Analyser para visualizador y detección de actividad de voz (VAD)
+      let analyser: AnalyserNode | null = null;
       try {
         const AudioCtxClass = window.AudioContext ||
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         const ctx = new AudioCtxClass();
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
         audioCtxRef.current = ctx;
-        const source   = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
+        const source = ctx.createMediaStreamSource(stream);
+        analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
         source.connect(analyser);
         analyserRef.current = analyser;
       } catch {
         analyserRef.current = null;
+      }
+
+      // 3. Reconocimiento de voz nativo en tiempo real (solo si no es iOS para evitar bloqueo de micrófono)
+      speechRecognitionTextRef.current = '';
+      const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+      
+      if (!isIOS) {
+        const SpeechRecognitionClass =
+          (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (SpeechRecognitionClass) {
+          try {
+            const recognition = new SpeechRecognitionClass();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'es-419';
+            recognition.maxAlternatives = 1;
+            recognition.onresult = (event: any) => {
+              let fullText = '';
+              for (let i = 0; i < event.results.length; i++) {
+                fullText += event.results[i][0].transcript;
+              }
+              if (fullText.trim()) {
+                speechRecognitionTextRef.current = fullText.trim();
+              }
+            };
+            recognition.onerror = () => {};
+            recognition.start();
+            speechRecognitionRef.current = recognition;
+          } catch (_) {}
+        }
       }
 
       const mimeType = getSupportedMimeType();
@@ -491,6 +516,10 @@ export function useVoicePipeline(
       };
 
       recorder.onstop = () => {
+        if (vadTimerRef.current) {
+          clearInterval(vadTimerRef.current);
+          vadTimerRef.current = null;
+        }
         const chunks = chunksRef.current;
         const finalMime = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(chunks, { type: finalMime });
@@ -513,10 +542,47 @@ export function useVoicePipeline(
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
 
-      // Auto-detener a los 45 segundos máximo
+      // 4. VAD (Detección de voz inteligente): detecta cuando la persona habla y pausa por 1.6s para auto-enviar
+      if (analyser) {
+        let hasSpoken = false;
+        let silenceStart = 0;
+        const pcm = new Uint8Array(analyser.frequencyBinCount);
+
+        const vadInterval = setInterval(() => {
+          if (!isRecordingRef.current) {
+            clearInterval(vadInterval);
+            return;
+          }
+          const an = analyserRef.current;
+          if (!an) return;
+
+          an.getByteFrequencyData(pcm);
+          let sum = 0;
+          for (let i = 0; i < pcm.length; i++) sum += pcm[i];
+          const avg = sum / pcm.length;
+          const level = avg / 255;
+
+          if (level > 0.05) {
+            hasSpoken = true;
+            silenceStart = 0;
+          } else if (hasSpoken) {
+            if (silenceStart === 0) {
+              silenceStart = Date.now();
+            } else if (Date.now() - silenceStart > 1600) {
+              console.log('[VoicePipeline] VAD: Pausa de voz detectada. Auto-enviando...');
+              clearInterval(vadInterval);
+              stopRecording();
+            }
+          }
+        }, 120);
+
+        vadTimerRef.current = vadInterval;
+      }
+
+      // Auto-detener a los 35 segundos máximo por seguridad
       silenceTimerRef.current = setTimeout(() => {
         if (isRecordingRef.current) stopRecording();
-      }, 45_000);
+      }, 35_000);
 
     } catch (err) {
       cleanupAudio();
@@ -629,6 +695,7 @@ export function useVoicePipeline(
     startRecording,
     stopRecording,
     sendTextMessage,
+    speak,
     interruptSpeech,
     resetConversation,
     saveConversation,

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, Send, Loader2, Type, X, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AvatarStatus } from '../hooks/useAvatarState';
+import { unlockAudio } from '../hooks/useVoicePipeline';
 
 interface VoiceControlProps {
   status: AvatarStatus;
@@ -118,6 +119,7 @@ export function VoiceControl({
   // ── Acción del botón de micrófono (Toggle fiable y sin falsos cortes) ──────
   const handleMicClick = () => {
     if (isProcessingRef.current) return;
+    unlockAudio();
 
     // Debounce de 350ms para evitar dobles toques accidentales en móviles y PC
     const now = Date.now();
@@ -137,6 +139,7 @@ export function VoiceControl({
   const handleTextSubmit = () => {
     const t = textInput.trim();
     if (!t || isProcessing) return;
+    unlockAudio();
     onTextSubmit?.(t);
     setTextInput('');
     setShowText(false);
@@ -147,15 +150,15 @@ export function VoiceControl({
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   const label = isRecording
-    ? `🔴 Grabando... Di tu mensaje · Toca para enviar (${fmt(recSecs)})`
+    ? `🔴 Escuchando... Di tu mensaje (se envía solo al pausar) (${fmt(recSecs)})`
     : isProcessing
-    ? 'Procesando respuesta neural...'
+    ? 'Mirror está pensando la respuesta...'
     : isSpeaking
-    ? 'Mirror está hablando... (Esc o toca para silenciar)'
-    : 'Toca para hablar · Espacio · T para escribir';
+    ? 'Mirror está hablando... (toca para pausar)'
+    : 'Toca para hablar · Usa [T] para escribir';
 
   return (
-    <div className="fixed bottom-3 sm:bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 sm:gap-2.5 z-50 w-[94%] max-w-sm sm:max-w-md select-none pointer-events-auto">
+    <div className="fixed bottom-6 sm:bottom-7 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 sm:gap-2.5 z-40 w-[94%] max-w-sm sm:max-w-md select-none pointer-events-auto">
 
       {/* ── Input flotante de texto ── */}
       <AnimatePresence>

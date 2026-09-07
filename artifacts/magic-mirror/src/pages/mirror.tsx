@@ -12,7 +12,7 @@ import { useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-re
 import { getSavedSettings } from '@/lib/settingsStorage';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'wouter';
-import { Settings, History, RotateCcw, StopCircle } from 'lucide-react';
+import { Settings, History, RotateCcw, StopCircle, Volume2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { vibrateStart } from '@/lib/haptic';
 import { useToast } from '@/hooks/use-toast';
@@ -22,7 +22,7 @@ export default function MirrorPage() {
   const { status, setStatus, mouthOpenAmount, setSpeakingVolume } = useAvatarState();
   const {
     isRecording, isProcessing, startRecording, stopRecording,
-    sendTextMessage,
+    sendTextMessage, speak,
     history, lastTranscript, lastError,
     analyser, interruptSpeech, resetConversation,
   } = useVoicePipeline(setStatus, setSpeakingVolume);
@@ -32,6 +32,7 @@ export default function MirrorPage() {
 
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
   const [micLevel,         setMicLevel]         = useState(0);
+  const [dismissedAiMsg,   setDismissedAiMsg]   = useState<string | null>(null);
 
   const seenCountRef        = useRef(0);
   const prevStatusRef       = useRef(status);
@@ -164,7 +165,10 @@ export default function MirrorPage() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={resetConversation}
+            onClick={() => {
+              setDismissedAiMsg(null);
+              resetConversation();
+            }}
             className="rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/10 w-8 h-8 sm:w-9 sm:h-9"
             title="Nueva conversación (N)"
           >
@@ -240,14 +244,45 @@ export default function MirrorPage() {
         )}
       </AnimatePresence>
 
-      {/* Subtítulos de la Respuesta de IA */}
+      {/* ── Tarjeta Persistente de Respuesta de IA ── */}
       <AnimatePresence>
-        {status === 'speaking' && lastAiMsg && (
-          <motion.div key="cap"
-            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="absolute bottom-36 sm:bottom-44 left-1/2 -translate-x-1/2 w-[90%] sm:w-[85%] max-w-lg z-30 pointer-events-none">
-            <div className="glass-panel rounded-2xl px-4 py-2.5 sm:px-5 sm:py-3 border border-white/10 text-center shadow-2xl backdrop-blur-xl bg-black/50">
-              <p className="text-xs sm:text-sm text-white/90 font-light leading-relaxed line-clamp-3">{lastAiMsg}</p>
+        {lastAiMsg && lastAiMsg !== dismissedAiMsg && !isRecording && (
+          <motion.div
+            key="ai-response-card"
+            initial={{ opacity: 0, y: 15, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            transition={{ duration: 0.25 }}
+            className="absolute bottom-32 sm:bottom-40 left-1/2 -translate-x-1/2 w-[92%] sm:w-[85%] max-w-lg z-30 pointer-events-auto"
+          >
+            <div className="glass-panel rounded-2xl p-3 sm:p-4 border border-white/15 shadow-2xl backdrop-blur-xl bg-black/70 text-left">
+              <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/10">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                  <span className="text-[10px] sm:text-xs font-mono font-semibold uppercase tracking-wider text-primary">
+                    {avatarName}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => speak(lastAiMsg)}
+                    className="p-1 rounded-md hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+                    title="Escuchar de nuevo"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setDismissedAiMsg(lastAiMsg)}
+                    className="p-1 rounded-md hover:bg-white/10 text-white/50 hover:text-white transition-colors"
+                    title="Cerrar mensaje"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs sm:text-sm text-white/95 font-normal leading-relaxed max-h-28 overflow-y-auto pr-1">
+                {lastAiMsg}
+              </p>
             </div>
           </motion.div>
         )}
@@ -287,6 +322,8 @@ export default function MirrorPage() {
           isOpen={isTranscriptOpen}
           onToggle={handleToggleTranscript}
           unreadCount={unreadCount}
+          onSendMessage={handleTextSubmit}
+          isProcessing={isProcessing}
         />
       </div>
 

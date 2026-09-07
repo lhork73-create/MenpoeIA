@@ -38,6 +38,7 @@ testem.log
 /typings
 
 # System Files
+*.mp4
 .DS_Store
 Thumbs.db
 
