@@ -1,4 +1,4 @@
-﻿{
+{
   "buildCommand": "pnpm --filter @workspace/magic-mirror run build",
   "outputDirectory": "artifacts/magic-mirror/dist/public",
   "rewrites": [
