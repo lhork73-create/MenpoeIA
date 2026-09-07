@@ -459,8 +459,8 @@ function PristineDesktopAvatar({ status, mouthOpenAmount }: PristineDesktopAvata
     neckPivotRef.current.rotation.set(headRot.current.pitch, headRot.current.yaw, headRot.current.roll);
     if (rootGroupRef.current) {
       const isMobile = typeof window !== 'undefined' && (window.innerWidth < 768 || window.innerWidth < window.innerHeight);
-      const targetScale = isMobile ? 0.76 : 0.88;
-      const targetY = (isMobile ? -0.06 : -0.14) + breathY;
+      const targetScale = isMobile ? 0.60 : 0.88;
+      const targetY = (isMobile ? 0.05 : -0.14) + breathY;
       rootGroupRef.current.position.set(0, targetY, 0);
       rootGroupRef.current.scale.setScalar(targetScale);
     }
@@ -513,10 +513,12 @@ function ResponsiveCamera() {
       const isMobile = size.width < 768 || size.width < size.height;
       if (isMobile) {
         // En móviles verticales (smartphones):
-        // Ajuste proporcional con holgura para no cortar los bordes y dejar
-        // libre la zona inferior para los controles de voz
-        camera.position.set(0, 0.15, 2.20);
-        camera.fov = 34;
+        // Con la relación de aspecto vertical de smartphones (~9:20), la cámara se aleja
+        // a Z=3.10 y sube a Y=0.22 con fov=36. Junto con targetScale=0.60, el avatar
+        // queda perfectamente proporcionado, con hombros y cuello visibles, en el tercio
+        // superior de la pantalla y sin invadir los controles de voz inferiores.
+        camera.position.set(0, 0.22, 3.10);
+        camera.fov = 36;
       } else {
         // En pantallas horizontales (PC, laptops): encuadre nítido y cercano
         camera.position.set(0, 0.06, 1.35);
