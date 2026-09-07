@@ -457,7 +457,13 @@ function PristineDesktopAvatar({ status, mouthOpenAmount }: PristineDesktopAvata
       THREE.MathUtils.clamp(gazeRoll + idleRoll + stateRoll, -0.05, 0.05), 0.09);
 
     neckPivotRef.current.rotation.set(headRot.current.pitch, headRot.current.yaw, headRot.current.roll);
-    if (rootGroupRef.current) rootGroupRef.current.position.set(0, -0.14 + breathY, 0);
+    if (rootGroupRef.current) {
+      const isMobile = typeof window !== 'undefined' && (window.innerWidth < 768 || window.innerWidth < window.innerHeight);
+      const targetScale = isMobile ? 0.76 : 0.88;
+      const targetY = (isMobile ? -0.06 : -0.14) + breathY;
+      rootGroupRef.current.position.set(0, targetY, 0);
+      rootGroupRef.current.scale.setScalar(targetScale);
+    }
   });
 
   return (
@@ -504,11 +510,13 @@ function ResponsiveCamera() {
   const { camera, size } = useThree();
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
-      const isPortrait = size.width < size.height;
-      if (isPortrait) {
-        // En móviles verticales (smartphones): encuadre con holgura para no cortar los lados
-        camera.position.set(0, 0.04, 1.58);
-        camera.fov = 32;
+      const isMobile = size.width < 768 || size.width < size.height;
+      if (isMobile) {
+        // En móviles verticales (smartphones):
+        // Ajuste proporcional con holgura para no cortar los bordes y dejar
+        // libre la zona inferior para los controles de voz
+        camera.position.set(0, 0.15, 2.20);
+        camera.fov = 34;
       } else {
         // En pantallas horizontales (PC, laptops): encuadre nítido y cercano
         camera.position.set(0, 0.06, 1.35);

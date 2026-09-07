@@ -129,7 +129,7 @@ export default function MirrorPage() {
 
   return (
     <div
-      className="relative w-full h-screen overflow-hidden bg-background select-none"
+      className="fixed inset-0 w-full h-full h-[100dvh] max-h-[100dvh] overflow-hidden bg-background select-none touch-none overscroll-none"
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >

@@ -1,8 +1,9 @@
 export const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || "";
 
 const GEMINI_MODELS = [
-  "gemini-3.6-flash",
   "gemini-3.5-flash",
+  "gemini-3.6-flash",
+  "gemini-3.7-flash",
   "gemini-3.8-flash",
   "gemini-flash-latest",
 ];
