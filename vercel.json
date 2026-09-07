@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "vite",
-  "buildCommand": "pnpm --filter @workspace/magic-mirror run build",
-  "outputDirectory": "artifacts/magic-mirror/dist/public",
   "rewrites": [
     {
       "source": "/((?!api/).*)",
