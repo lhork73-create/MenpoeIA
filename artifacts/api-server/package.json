@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm run build && pnpm run start",
-    "build": "node ./build.mjs",
+    "build": "node ./build.mjs && node scripts/copy-dist.cjs",
+    "build:vercel": "pnpm --filter @workspace/magic-mirror run build && node scripts/copy-dist.cjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
