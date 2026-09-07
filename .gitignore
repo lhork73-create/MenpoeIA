@@ -52,3 +52,12 @@ Thumbs.db
 .firebase/
 .env
 .env.local
+
+# Built/compiled frontend assets (contain embedded API keys)
+/public/
+/artifacts/magic-mirror/dist/
+/artifacts/api-server/public/
+/artifacts/api-server/dist/
+
+# Scratch files
+/scratch/

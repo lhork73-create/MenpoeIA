@@ -10,7 +10,7 @@ import { ChatMessage } from '@workspace/api-client-react';
 import { useToast } from '@/hooks/use-toast';
 import { AvatarStatus } from './useAvatarState';
 import { vibrateError } from '@/lib/haptic';
-import { generateGeminiReply } from '@/lib/gemini';
+import { generateGeminiReply, transcribeAudioWithGemini } from '@/lib/gemini';
 
 export type ResponseLength = 'corta' | 'media' | 'larga';
 
@@ -20,7 +20,7 @@ const LENGTH_INSTRUCTION: Record<ResponseLength, string> = {
   larga: '\n\nIMPORTANTE: Puedes dar una respuesta detallada y completa.',
 };
 
-// Prioridad de formatos de audio soportados por el navegador
+// Formatos de audio soportados (prioridad en función de compatibilidad)
 const MIME_PRIORITY = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -114,6 +114,9 @@ export function useVoicePipeline(
   const ttsAnimRef            = useRef<number | null>(null);
   const silenceTimerRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
+  const speechRecognitionRef    = useRef<any>(null);
+  const speechRecognitionTextRef = useRef<string>('');
+  const chunksRef = useRef<Blob[]>([]);
 
   const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
   const settingsRef = useRef(settings);
@@ -191,101 +194,167 @@ export function useVoicePipeline(
     analyserRef.current = null;
   }, []);
 
+  // ── Llamada a Gemini para chat ────────────────────────────────────────────
+  const callGeminiChat = useCallback(async (
+    userText: string,
+    currentHistory: ChatMessage[],
+    finalPrompt?: string
+  ): Promise<{ text: string; tokensUsed: number }> => {
+    try {
+      return await generateGeminiReply(userText, currentHistory, finalPrompt);
+    } catch (geminiErr) {
+      console.warn('[VoicePipeline] Gemini client failed, trying backend...', geminiErr);
+      const chatRes = await chatMutation.mutateAsync({
+        data: { message: userText, history: currentHistory, systemPrompt: finalPrompt },
+      });
+      return { text: chatRes.message, tokensUsed: chatRes.tokensUsed ?? 0 };
+    }
+  }, [chatMutation]);
+
+  // ── Procesar texto de usuario ─────────────────────────────────────────────
+  const processUserText = useCallback(async (userText: string) => {
+    const trimmed = userText.trim();
+    if (!trimmed) return;
+
+    console.log('[VoicePipeline] Processing user text:', trimmed);
+
+    setLastTranscript(trimmed);
+    if (!sessionStart) setSessionStart(Date.now());
+
+    const userMsg: ChatMessage = { role: 'user' as const, content: trimmed };
+    const currentHistory = historyRef.current;
+    const updatedHistory = [...currentHistory, userMsg];
+
+    // Actualizar historial inmediatamente para que se vea en la UI
+    setHistory(updatedHistory);
+    historyRef.current = updatedHistory;
+
+    const basePrompt  = settingsRef.current?.systemPrompt ?? undefined;
+    const lengthExtra = LENGTH_INSTRUCTION[responseLenRef.current];
+    const finalPrompt = basePrompt ? basePrompt + lengthExtra : undefined;
+
+    try {
+      const { text: replyMessage, tokensUsed: replyTokens } = await callGeminiChat(
+        trimmed,
+        currentHistory,
+        finalPrompt
+      );
+
+      const aiMsg: ChatMessage = { role: 'assistant' as const, content: replyMessage };
+      const finalHistory = [...updatedHistory, aiMsg];
+      setHistory(finalHistory);
+      historyRef.current = finalHistory;
+      setTokensTotal(prev => prev + replyTokens);
+      setIsProcessing(false);
+
+      await speak(replyMessage);
+    } catch (err) {
+      throw err;
+    }
+  }, [sessionStart, callGeminiChat, speak]);
+
   // ── Procesar blob de audio ────────────────────────────────────────────────
   const handleAudioBlob = useCallback(async (blob: Blob, mimeType: string) => {
     setIsProcessing(true);
     setLastError(null);
     setStatus('thinking');
 
+    console.log('[VoicePipeline] handleAudioBlob called, size:', blob.size, 'mime:', mimeType);
+
     try {
       const recDuration = Date.now() - recordingStartTimeRef.current;
-      if (blob.size < 600 || recDuration < 700) {
-        // Toque accidental o ultracorto: cancelar limpiamente sin alarma
+      console.log('[VoicePipeline] Recording duration:', recDuration, 'ms');
+
+      // Umbral reducido: 200 bytes y 300ms para no filtrar audio real corto
+      if (blob.size < 200 || recDuration < 300) {
         setStatus('idle');
         setIsProcessing(false);
         toast({
-          title: 'Audio muy breve',
-          description: 'Toca el micrófono para empezar a hablar, y tócalo de nuevo al terminar para enviar.',
+          title: 'Audio muy corto',
+          description: 'Pulsa el micrófono, habla y pulsa de nuevo para enviar.',
         });
         return;
       }
 
-      const base64 = await blobToBase64(blob);
+      // Esperar un poco a que SpeechRecognition procese sus resultados finales
+      await new Promise(r => setTimeout(r, 400));
 
-      if (!base64 || base64.length < 100) {
-        setStatus('idle');
-        setIsProcessing(false);
-        return;
+      // 1. Prioridad: Reconocimiento nativo continuo del navegador
+      let userText = speechRecognitionTextRef.current.trim();
+      console.log('[VoicePipeline] SpeechRecognition text:', userText || '(empty)');
+
+      // 2. Si no hubo texto, transcribir con Gemini Multimodal
+      if (!userText) {
+        try {
+          const base64 = await blobToBase64(blob);
+          if (base64 && base64.length > 100) {
+            const cleanMime = mimeType.split(';')[0] || 'audio/webm';
+            console.log('[VoicePipeline] Trying Gemini audio transcription, mime:', cleanMime);
+            userText = (await transcribeAudioWithGemini(base64, cleanMime)).trim();
+            console.log('[VoicePipeline] Gemini transcription result:', userText || '(empty)');
+          }
+        } catch (geminiTransErr) {
+          console.warn('[VoicePipeline] Gemini transcription failed:', geminiTransErr);
+        }
       }
 
-      const transcribeRes = await transcribeMutation.mutateAsync({
-        data: { audioBase64: base64, mimeType: mimeType || 'audio/webm' },
-      });
+      // 3. Fallback al backend /api/transcribe
+      if (!userText) {
+        try {
+          const base64 = await blobToBase64(blob);
+          if (base64 && base64.length > 100) {
+            console.log('[VoicePipeline] Trying backend transcription...');
+            const transcribeRes = await transcribeMutation.mutateAsync({
+              data: { audioBase64: base64, mimeType: mimeType || 'audio/webm' },
+            });
+            userText = transcribeRes.text?.trim() ?? '';
+            console.log('[VoicePipeline] Backend transcription result:', userText || '(empty)');
+          }
+        } catch (backendErr) {
+          console.warn('[VoicePipeline] Backend transcription failed:', backendErr);
+        }
+      }
 
-      const userText = transcribeRes.text?.trim() ?? '';
       if (!userText) {
         setStatus('idle');
         setIsProcessing(false);
         toast({
-          title: 'Sin voz detectada',
-          description: 'No se escuchó voz con claridad. Habla cerca del micrófono e intenta de nuevo.',
+          title: 'No se detectó voz',
+          description: 'No se escuchó voz. Usa el teclado (ícono T) para escribir tu mensaje.',
         });
         return;
       }
 
-      setLastTranscript(userText);
-      if (!sessionStart) setSessionStart(Date.now());
-
-      const userMsg: ChatMessage = { role: 'user' as const, content: userText };
-      const updatedHistory = [...historyRef.current, userMsg];
-      setHistory(updatedHistory);
-
-      const basePrompt  = settingsRef.current?.systemPrompt ?? undefined;
-      const lengthExtra = LENGTH_INSTRUCTION[responseLenRef.current];
-      const finalPrompt = basePrompt ? basePrompt + lengthExtra : undefined;
-
-      let replyMessage = '';
-      let replyTokens = 0;
-
-      try {
-        const geminiRes = await generateGeminiReply(userText, historyRef.current, finalPrompt);
-        replyMessage = geminiRes.text;
-        replyTokens = geminiRes.tokensUsed;
-      } catch (geminiErr) {
-        console.warn('[VoicePipeline] Gemini client call failed, trying backend...', geminiErr);
-        const chatRes = await chatMutation.mutateAsync({
-          data: { message: userText, history: historyRef.current, systemPrompt: finalPrompt },
-        });
-        replyMessage = chatRes.message;
-        replyTokens = chatRes.tokensUsed ?? 0;
-      }
-
-      const aiMsg: ChatMessage = { role: 'assistant' as const, content: replyMessage };
-      const finalHistory = [...updatedHistory, aiMsg];
-      setHistory(finalHistory);
-      setTokensTotal(prev => prev + replyTokens);
-      setIsProcessing(false);
-
-      await speak(replyMessage);
+      await processUserText(userText);
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Algo salió mal. Intenta de nuevo.';
+      console.error('[VoicePipeline] handleAudioBlob error:', err);
       setLastError(msg);
       vibrateError();
       toast({ title: 'Error', description: msg, variant: 'destructive' });
       setStatus('idle');
       setIsProcessing(false);
     }
-  }, [transcribeMutation, chatMutation, speak, toast, setStatus, sessionStart]);
+  }, [transcribeMutation, processUserText, toast, setStatus]);
 
   // ── Detener grabación ────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
+    // Detener SpeechRecognition pero darle tiempo para enviar los resultados finales
+    if (speechRecognitionRef.current) {
+      try { speechRecognitionRef.current.stop(); } catch (_) {}
+      // No anulamos la ref inmediatamente — la callback onresult puede llegar aún
+      setTimeout(() => { speechRecognitionRef.current = null; }, 600);
+    }
+
     const recorder = mediaRecorderRef.current;
     if (!recorder) { setIsRecording(false); return; }
 
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 
     if (recorder.state === 'recording') {
+      // Solicitar datos finales antes de detener
+      try { recorder.requestData(); } catch (_) {}
       recorder.stop(); // dispara onstop → handleAudioBlob
     }
 
@@ -302,7 +371,7 @@ export function useVoicePipeline(
     setLastError(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
-      const msg = 'Tu navegador no soporta grabación de audio. Usa Chrome o Safari en iOS 14.3+.';
+      const msg = 'Tu navegador no soporta grabación. Usa Chrome o Safari 14.3+.';
       setLastError(msg);
       toast({ title: 'Navegador no compatible', description: msg, variant: 'destructive' });
       return;
@@ -311,6 +380,45 @@ export function useVoicePipeline(
     setStatus('listening');
 
     try {
+      // Iniciar reconocimiento de voz nativo en tiempo real
+      speechRecognitionTextRef.current = '';
+      const SpeechRecognitionClass =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognitionClass) {
+        try {
+          const recognition = new SpeechRecognitionClass();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = 'es-419';
+          recognition.maxAlternatives = 1;
+          recognition.onresult = (event: any) => {
+            let fullText = '';
+            for (let i = 0; i < event.results.length; i++) {
+              fullText += event.results[i][0].transcript;
+            }
+            if (fullText.trim()) {
+              speechRecognitionTextRef.current = fullText.trim();
+              console.log('[SpeechRecognition] interim:', fullText.trim());
+            }
+          };
+          recognition.onend = () => {
+            // SpeechRecognition puede detenerse automáticamente en iOS — reiniciar si aún se graba
+            if (isRecordingRef.current && speechRecognitionRef.current) {
+              try { speechRecognitionRef.current.start(); } catch (_) {}
+            }
+          };
+          recognition.onerror = (e: any) => {
+            console.warn('[SpeechRecognition] error:', e.error);
+          };
+          recognition.start();
+          speechRecognitionRef.current = recognition;
+        } catch (srErr) {
+          console.warn('[SpeechRecognition] failed to start:', srErr);
+        }
+      } else {
+        console.warn('[VoicePipeline] SpeechRecognition not available, will use Gemini transcription');
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -332,33 +440,37 @@ export function useVoicePipeline(
         source.connect(analyser);
         analyserRef.current = analyser;
       } catch {
-        // Si el AudioContext falla en iOS, continuar sin visualización
         analyserRef.current = null;
       }
 
       const mimeType = getSupportedMimeType();
       const recOptions = mimeType ? { mimeType } : {};
-      const chunks: Blob[] = [];
+      chunksRef.current = [];
 
       let recorder: MediaRecorder;
       try {
         recorder = new MediaRecorder(stream, recOptions);
       } catch {
-        // Reintentar sin opciones de mimeType
         recorder = new MediaRecorder(stream);
       }
 
       recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunks.push(e.data);
+        if (e.data && e.data.size > 0) {
+          chunksRef.current.push(e.data);
+          console.log('[MediaRecorder] chunk received, size:', e.data.size);
+        }
       };
 
       recorder.onstop = () => {
+        const chunks = chunksRef.current;
         const finalMime = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(chunks, { type: finalMime });
+        console.log('[MediaRecorder] stopped, total chunks:', chunks.length, 'blob size:', blob.size);
         handleAudioBlob(blob, finalMime);
       };
 
-      recorder.onerror = () => {
+      recorder.onerror = (e) => {
+        console.error('[MediaRecorder] error:', e);
         cleanupAudio();
         setIsRecording(false);
         setStatus('idle');
@@ -366,9 +478,9 @@ export function useVoicePipeline(
         toast({ title: 'Error de grabación', description: 'Intenta de nuevo.', variant: 'destructive' });
       };
 
-      // timeslice: recoger datos cada 250ms para chunks más pequeños y fiables
+      // timeslice 500ms para obtener chunks más fiables en móvil
       recordingStartTimeRef.current = Date.now();
-      recorder.start(250);
+      recorder.start(500);
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
 
@@ -381,8 +493,8 @@ export function useVoicePipeline(
       cleanupAudio();
       setStatus('idle');
       const msg = err instanceof Error && err.name === 'NotAllowedError'
-        ? 'Permiso de micrófono denegado. Permite el acceso al micrófono en tu navegador.'
-        : 'No se pudo acceder al micrófono. Comprueba que no esté en uso por otra app.';
+        ? 'Permiso de micrófono denegado. Permite el acceso en tu navegador.'
+        : 'No se pudo acceder al micrófono. Comprueba que no esté en uso.';
       setLastError(msg);
       vibrateError();
       toast({ title: 'Error de micrófono', description: msg, variant: 'destructive' });
@@ -402,61 +514,31 @@ export function useVoicePipeline(
     const trimmed = userText.trim();
     if (!trimmed || isProcessingRef.current) return;
 
+    console.log('[VoicePipeline] sendTextMessage:', trimmed);
+
     interruptSpeech();
     setIsProcessing(true);
     setLastError(null);
     setStatus('thinking');
 
     try {
-      setLastTranscript(trimmed);
-      if (!sessionStart) setSessionStart(Date.now());
-
-      const userMsg: ChatMessage = { role: 'user' as const, content: trimmed };
-      const currentHistory = historyRef.current;
-      const updatedHistory = [...currentHistory, userMsg];
-      setHistory(updatedHistory);
-
-      const basePrompt  = settingsRef.current?.systemPrompt ?? undefined;
-      const lengthExtra = LENGTH_INSTRUCTION[responseLenRef.current];
-      const finalPrompt = basePrompt ? basePrompt + lengthExtra : undefined;
-
-      let replyMessage = '';
-      let replyTokens = 0;
-
-      try {
-        const geminiRes = await generateGeminiReply(trimmed, currentHistory, finalPrompt);
-        replyMessage = geminiRes.text;
-        replyTokens = geminiRes.tokensUsed;
-      } catch (geminiErr) {
-        console.warn('[VoicePipeline] Gemini client call failed, trying backend...', geminiErr);
-        const chatRes = await chatMutation.mutateAsync({
-          data: { message: trimmed, history: currentHistory, systemPrompt: finalPrompt },
-        });
-        replyMessage = chatRes.message;
-        replyTokens = chatRes.tokensUsed ?? 0;
-      }
-
-      const aiMsg: ChatMessage = { role: 'assistant' as const, content: replyMessage };
-      const finalHistory = [...updatedHistory, aiMsg];
-      setHistory(finalHistory);
-      setTokensTotal(prev => prev + replyTokens);
-      setIsProcessing(false);
-
-      await speak(replyMessage);
+      await processUserText(trimmed);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Algo salió mal. Intenta de nuevo.';
+      console.error('[VoicePipeline] sendTextMessage error:', err);
       setLastError(msg);
       vibrateError();
       toast({ title: 'Error', description: msg, variant: 'destructive' });
       setStatus('idle');
       setIsProcessing(false);
     }
-  }, [chatMutation, speak, toast, setStatus, sessionStart, interruptSpeech]);
+  }, [processUserText, interruptSpeech, toast, setStatus]);
 
   // ── Resetear conversación ─────────────────────────────────────────────────
   const resetConversation = useCallback(() => {
     interruptSpeech();
     setHistory([]);
+    historyRef.current = [];
     setLastTranscript('');
     setTokensTotal(0);
     setSessionStart(null);
