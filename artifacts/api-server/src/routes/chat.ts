@@ -55,11 +55,11 @@ async function callGoogleGemini(
       });
 
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
+        const errData: any = await res.json().catch(() => ({}));
         throw new Error(errData?.error?.message || `HTTP ${res.status}`);
       }
 
-      const data = await res.json();
+      const data: any = await res.json();
       const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
       if (reply) {
         const tokens = data.usageMetadata?.totalTokenCount || Math.round(reply.length / 4);
@@ -84,7 +84,7 @@ router.post("/chat", async (req, res): Promise<void> => {
   const { message, history, systemPrompt } = parsed.data;
 
   try {
-    const result = await callGoogleGemini(message, history, systemPrompt);
+    const result = await callGoogleGemini(message, history, systemPrompt ?? undefined);
     res.json(SendChatResponse.parse({ message: result.text, tokensUsed: result.tokensUsed }));
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

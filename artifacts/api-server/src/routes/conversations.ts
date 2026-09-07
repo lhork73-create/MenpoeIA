@@ -29,7 +29,7 @@ router.get("/conversations", async (_req, res): Promise<void> => {
         .orderBy(conversationsTable.createdAt);
 
       res.json(ListConversationsResponse.parse(
-        rows.map((r) => ({
+        rows.map((r: any) => ({
           ...r,
           messages: r.messages as { role: string; content: string }[],
           createdAt: r.createdAt.toISOString(),
