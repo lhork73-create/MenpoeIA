@@ -2,6 +2,12 @@ import React, { Component, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { setBaseUrl } from "@workspace/api-client-react";
+
+// Si se define una URL de API remota (ej: Vercel para backend en la nube)
+if (import.meta.env.VITE_API_URL) {
+  setBaseUrl(import.meta.env.VITE_API_URL);
+}
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {

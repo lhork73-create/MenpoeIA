@@ -12,18 +12,16 @@
 import React, { useRef, useEffect } from 'react';
 import { AvatarStatus } from '../hooks/useAvatarState';
 import { ThemeColors } from '../hooks/useTheme';
-import { AvatarGender } from './RealisticFaceAvatar';
-
 interface Props {
   status: AvatarStatus;
   mouthOpenAmount: number;
   micLevel?: number;
-  gender?: AvatarGender;
+  gender?: string;
   theme?: ThemeColors;
 }
 
 export function RealisticFace2D({
-  status, mouthOpenAmount, micLevel = 0, gender = 'female', theme,
+  status, mouthOpenAmount, micLevel = 0, gender = 'male', theme,
 }: Props) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);

@@ -3,7 +3,7 @@ import Groq from "groq-sdk";
 import { TextToSpeechBody, TextToSpeechResponse } from "@workspace/api-zod";
 
 const router: IRouter = Router();
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+function getGroq() { return new Groq({ apiKey: process.env.GROQ_API_KEY || "placeholder" }); }
 
 // Orpheus TTS voices (canopylabs/orpheus-v1-english)
 const ORPHEUS_VOICES = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"];
@@ -21,13 +21,13 @@ router.post("/tts", async (req, res): Promise<void> => {
     ? voice.toLowerCase()
     : "tara";
 
-  const audioResponse = await groq.audio.speech.create({
+  const audioResponse = await getGroq().audio.speech.create({
     model: "canopylabs/orpheus-v1-english",
     input: text,
     voice: selectedVoice,
     response_format: "wav",
     speed: speed ?? 1.0,
-  } as Parameters<typeof groq.audio.speech.create>[0]);
+  } as any);
 
   const arrayBuffer = await audioResponse.arrayBuffer();
   const audioBase64 = Buffer.from(arrayBuffer).toString("base64");

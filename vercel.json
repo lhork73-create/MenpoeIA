@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "buildCommand": "pnpm --filter @workspace/magic-mirror run build",
+  "outputDirectory": "artifacts/magic-mirror/dist/public",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/((?!api/|models/|assets/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

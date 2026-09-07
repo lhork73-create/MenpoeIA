@@ -10,17 +10,41 @@ import {
 
 const router: IRouter = Router();
 
+interface FallbackConversation {
+  id: number;
+  title: string;
+  messages: Array<{ role: string; content: string }>;
+  createdAt: Date;
+}
+
+const fallbackConversations: FallbackConversation[] = [];
+let nextConvId = 1;
+
 router.get("/conversations", async (_req, res): Promise<void> => {
-  const rows = await db
-    .select()
-    .from(conversationsTable)
-    .orderBy(conversationsTable.createdAt);
+  if (db) {
+    try {
+      const rows = await db
+        .select()
+        .from(conversationsTable)
+        .orderBy(conversationsTable.createdAt);
+
+      res.json(ListConversationsResponse.parse(
+        rows.map((r) => ({
+          ...r,
+          messages: r.messages as { role: string; content: string }[],
+          createdAt: r.createdAt.toISOString(),
+        }))
+      ));
+      return;
+    } catch {
+      // Postgres error fallback
+    }
+  }
 
   res.json(ListConversationsResponse.parse(
-    rows.map((r) => ({
-      ...r,
-      messages: r.messages as { role: string; content: string }[],
-      createdAt: r.createdAt.toISOString(),
+    fallbackConversations.map((c) => ({
+      ...c,
+      createdAt: c.createdAt.toISOString(),
     }))
   ));
 });
@@ -32,15 +56,35 @@ router.post("/conversations", async (req, res): Promise<void> => {
     return;
   }
 
-  const [row] = await db
-    .insert(conversationsTable)
-    .values({ title: parsed.data.title, messages: parsed.data.messages })
-    .returning();
+  if (db) {
+    try {
+      const [row] = await db
+        .insert(conversationsTable)
+        .values({ title: parsed.data.title, messages: parsed.data.messages })
+        .returning();
+
+      res.status(201).json({
+        ...row,
+        messages: row.messages as { role: string; content: string }[],
+        createdAt: row.createdAt.toISOString(),
+      });
+      return;
+    } catch {
+      // Postgres error fallback
+    }
+  }
+
+  const newConv: FallbackConversation = {
+    id: nextConvId++,
+    title: parsed.data.title,
+    messages: parsed.data.messages as { role: string; content: string }[],
+    createdAt: new Date(),
+  };
+  fallbackConversations.push(newConv);
 
   res.status(201).json({
-    ...row,
-    messages: row.messages as { role: string; content: string }[],
-    createdAt: row.createdAt.toISOString(),
+    ...newConv,
+    createdAt: newConv.createdAt.toISOString(),
   });
 });
 
@@ -52,9 +96,23 @@ router.delete("/conversations/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  await db
-    .delete(conversationsTable)
-    .where(eq(conversationsTable.id, params.data.id));
+  if (db) {
+    try {
+      await db
+        .delete(conversationsTable)
+        .where(eq(conversationsTable.id, params.data.id));
+
+      res.json(DeleteConversationResponse.parse({ success: true }));
+      return;
+    } catch {
+      // Postgres error fallback
+    }
+  }
+
+  const idx = fallbackConversations.findIndex((c) => c.id === params.data.id);
+  if (idx !== -1) {
+    fallbackConversations.splice(idx, 1);
+  }
 
   res.json(DeleteConversationResponse.parse({ success: true }));
 });

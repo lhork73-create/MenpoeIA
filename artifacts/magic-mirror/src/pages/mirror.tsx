@@ -1,63 +1,36 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Avatar, AvatarGender } from '@/components/Avatar';
+import { Avatar } from '@/components/Avatar';
 import { VoiceControl } from '@/components/VoiceControl';
 import { TranscriptPanel } from '@/components/TranscriptPanel';
 import { ParticleBackground } from '@/components/ParticleBackground';
 import { KeyboardHelp } from '@/components/KeyboardHelp';
-import { SessionStats } from '@/components/SessionStats';
 import { ThinkingIndicator } from '@/components/ThinkingIndicator';
 import { useAvatarState } from '@/hooks/useAvatarState';
-import { useVoicePipeline, ResponseLength } from '@/hooks/useVoicePipeline';
-import { useTheme, ThemeName } from '@/hooks/useTheme';
-import { useGetSettings, getGetSettingsQueryKey, useSendChat } from '@workspace/api-client-react';
+import { useVoicePipeline } from '@/hooks/useVoicePipeline';
+import { useTheme } from '@/hooks/useTheme';
+import { useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'wouter';
-import {
-  Settings, History, RotateCcw, Save, StopCircle,
-  Palette, Share2, AlignLeft, AlignCenter, AlignJustify,
-  Download, Gauge, Volume2, User, UserRound,
-} from 'lucide-react';
+import { Settings, History, RotateCcw, StopCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { vibrateStart } from '@/lib/haptic';
 import { useToast } from '@/hooks/use-toast';
-
-const LENGTH_ICONS: Record<ResponseLength, React.ReactNode> = {
-  corta: <AlignLeft   className="w-3.5 h-3.5" />,
-  media: <AlignCenter className="w-3.5 h-3.5" />,
-  larga: <AlignJustify className="w-3.5 h-3.5" />,
-};
-const LENGTHS: ResponseLength[] = ['corta', 'media', 'larga'];
-
-const getStoredGender = (): AvatarGender =>
-  (localStorage.getItem('avatarGender') as AvatarGender) || 'female';
 
 export default function MirrorPage() {
   const { toast } = useToast();
   const { status, setStatus, mouthOpenAmount, setSpeakingVolume } = useAvatarState();
   const {
     isRecording, isProcessing, startRecording, stopRecording,
+    sendTextMessage,
     history, lastTranscript, lastError,
-    analyser, interruptSpeech, resetConversation, saveConversation, exportConversation,
-    tokensTotal, sessionStart,
-    responseLength, setResponseLength,
-    ttsSpeed, setTtsSpeed,
+    analyser, interruptSpeech, resetConversation,
   } = useVoicePipeline(setStatus, setSpeakingVolume);
 
-  const { theme, setTheme, themes } = useTheme();
+  const { theme } = useTheme();
   const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
-  const chatMutation = useSendChat();
 
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
-  const [handsFree,        setHandsFree]        = useState(false);
-  const [showThemePicker,  setShowThemePicker]  = useState(false);
-  const [showSpeedPanel,   setShowSpeedPanel]   = useState(false);
   const [micLevel,         setMicLevel]         = useState(0);
-  const [avatarGender,     setAvatarGenderState]= useState<AvatarGender>(getStoredGender);
-
-  const setAvatarGender = (g: AvatarGender) => {
-    setAvatarGenderState(g);
-    localStorage.setItem('avatarGender', g);
-  };
 
   const seenCountRef        = useRef(0);
   const prevStatusRef       = useRef(status);
@@ -98,61 +71,46 @@ export default function MirrorPage() {
     if (isTranscriptOpen) seenCountRef.current = aiCount;
   }, [aiCount, isTranscriptOpen]);
 
-  // ── Manos libres ──────────────────────────────────────────────────────────
+  // ── Feedback háptico al cambiar de estado ──────────────────────────────────
   useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = status;
-    if (prev === 'speaking' && status === 'idle' && handsFree) {
-      const t = setTimeout(() => { vibrateStart(); startRecordingRef.current(); }, 800);
-      return () => clearTimeout(t);
+    if (status === 'listening' && prevStatusRef.current !== 'listening') {
+      vibrateStart();
     }
-    return undefined;
-  }, [status, handsFree]);
-
-  // ── Doble toque para interrumpir ──────────────────────────────────────────
-  const lastTapRef = useRef(0);
-  const handleAvatarTap = useCallback(() => {
-    if (status !== 'speaking') return;
-    const now = Date.now();
-    if (now - lastTapRef.current < 400) interruptRef.current();
-    lastTapRef.current = now;
+    prevStatusRef.current = status;
   }, [status]);
 
+  // ── Tap en el avatar ──────────────────────────────────────────────────────
+  const handleAvatarTap = () => {
+    if (status === 'speaking') {
+      interruptSpeech();
+      toast({ title: 'Silenciado', description: 'Has interrumpido la respuesta.' });
+    }
+  };
+
   // ── Envío de texto ────────────────────────────────────────────────────────
-  const handleTextSubmit = useCallback(async (text: string) => {
-    if (!text.trim() || isProcessing) return;
-    interruptRef.current();
-    try {
-      await chatMutation.mutateAsync({
-        data: { message: text, history, systemPrompt: settings?.systemPrompt ?? undefined },
-      });
-    } catch {
-      setStatus('idle');
-    }
-  }, [isProcessing, history, chatMutation, settings, setStatus]);
+  const handleTextSubmit = (text: string) => {
+    sendTextMessage(text);
+  };
 
-  // ── Compartir ─────────────────────────────────────────────────────────────
-  const shareLastMessage = useCallback(() => {
-    const last = [...history].reverse().find(m => m.role === 'assistant')?.content;
-    if (!last) return;
-    if (navigator.share) {
-      navigator.share({ title: 'Mirror AI', text: last }).catch(() => {});
-    } else {
-      navigator.clipboard.writeText(last)
-        .then(() => toast({ title: 'Copiado al portapapeles ✓' }))
-        .catch(() => {});
-    }
-  }, [history, toast]);
-
-  // ── Teclado ───────────────────────────────────────────────────────────────
+  // ── Teclas globales ───────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (e.key === 'h' || e.key === 'H') { e.preventDefault(); handleToggleTranscript(); }
-      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); resetRef.current(); }
-      if (e.key === 'Escape') interruptRef.current();
-      if (e.key === 'm' || e.key === 'M') { e.preventDefault(); setHandsFree(v => !v); }
+
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault();
+        startRecordingRef.current();
+      }
+      if (e.code === 'Escape') {
+        interruptRef.current();
+      }
+      if (e.key === 'h' || e.key === 'H') {
+        handleToggleTranscript();
+      }
+      if (e.key === 'n' || e.key === 'N') {
+        resetRef.current();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -171,241 +129,140 @@ export default function MirrorPage() {
 
   return (
     <div
-      className="relative w-full h-screen overflow-hidden bg-background"
+      className="relative w-full h-screen overflow-hidden bg-background select-none"
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >
       <ParticleBackground primaryRgb={theme.rgb} />
 
+      {/* Atmospheric lighting glow */}
       <div className="fixed inset-0 pointer-events-none z-[1]">
-        <div className="absolute top-0 left-1/4 w-1/2 h-1/2 bg-primary/5 blur-[100px] rounded-full" />
-        <div className="absolute bottom-0 right-1/4 w-1/3 h-1/3 bg-secondary/5 blur-[100px] rounded-full" />
+        <div className="absolute top-0 left-1/4 w-1/2 h-1/2 bg-primary/5 blur-[120px] rounded-full" />
+        <div className="absolute bottom-0 right-1/4 w-1/3 h-1/3 bg-secondary/5 blur-[120px] rounded-full" />
       </div>
 
-      {/* Stats */}
-      <div className="relative z-40">
-        <SessionStats messageCount={history.length} tokensTotal={tokensTotal} sessionStart={sessionStart} />
-      </div>
-
-      {/* ── Nav izquierda ── */}
-      <div className="absolute top-4 left-4 z-50 flex gap-2">
-        <Link href="/history">
-          <Button variant="ghost" size="icon"
-            className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Historial">
-            <History className="w-4 h-4" />
-          </Button>
-        </Link>
-        <Link href="/settings">
-          <Button variant="ghost" size="icon"
-            className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Configuración">
-            <Settings className="w-4 h-4" />
-          </Button>
-        </Link>
-      </div>
-
-      {/* ── Toolbar derecha ── */}
-      <div className="absolute top-4 right-16 z-50 flex items-center gap-1.5 flex-wrap justify-end">
-
-        {/* Gender toggle */}
-        <div className="flex rounded-full border border-white/10 overflow-hidden bg-black/30 backdrop-blur-md">
-          <button
-            onClick={() => setAvatarGender('female')}
-            title="Avatar femenino"
-            className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono transition-all ${
-              avatarGender === 'female'
-                ? 'bg-pink-500/25 text-pink-300 border-r border-pink-500/20'
-                : 'text-white/35 hover:text-white/70 hover:bg-white/5 border-r border-white/10'
-            }`}>
-            <UserRound className="w-3.5 h-3.5" />
-            <span>Mujer</span>
-          </button>
-          <button
-            onClick={() => setAvatarGender('male')}
-            title="Avatar masculino"
-            className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono transition-all ${
-              avatarGender === 'male'
-                ? 'bg-blue-500/25 text-blue-300'
-                : 'text-white/35 hover:text-white/70 hover:bg-white/5'
-            }`}>
-            <User className="w-3.5 h-3.5" />
-            <span>Hombre</span>
-          </button>
+      {/* ── Header Limpio y Minimalista ── */}
+      <header className="absolute top-3 left-4 right-4 sm:top-5 sm:left-6 sm:right-6 z-50 flex items-center justify-between pointer-events-none">
+        {/* Branding & Status */}
+        <div className="flex items-center gap-2.5 sm:gap-3 pointer-events-auto">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.8)]" />
+          <span className="text-xs sm:text-sm font-mono font-bold tracking-[0.25em] text-white/90 uppercase">
+            {avatarName}
+          </span>
+          <span className="text-[9px] font-mono text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 uppercase tracking-widest hidden sm:inline">
+            EN LÍNEA
+          </span>
         </div>
 
-        {/* Longitud de respuesta */}
-        <div className="flex rounded-full border border-white/10 overflow-hidden bg-black/30 backdrop-blur-md">
-          {LENGTHS.map(len => (
-            <button key={len} onClick={() => setResponseLength(len)} title={`Respuesta ${len}`}
-              className={`flex items-center gap-1 px-2.5 py-2 text-[10px] font-mono transition-all ${
-                len !== 'corta' ? 'border-l border-white/10' : ''
-              } ${
-                responseLength === len ? 'bg-primary/30 text-primary' : 'text-white/35 hover:text-white/70 hover:bg-white/5'
-              }`}>
-              {LENGTH_ICONS[len]}
-              <span className="hidden sm:inline capitalize">{len}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Velocidad TTS */}
-        <div className="relative">
-          <Button variant="ghost" size="icon"
-            onClick={() => { setShowSpeedPanel(v => !v); setShowThemePicker(false); }}
-            className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Velocidad de voz">
-            <Gauge className="w-4 h-4" />
+        {/* Acciones Esenciales */}
+        <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
+          {/* Nueva conversación */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={resetConversation}
+            className="rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/10 w-8 h-8 sm:w-9 sm:h-9"
+            title="Nueva conversación (N)"
+          >
+            <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </Button>
-          <AnimatePresence>
-            {showSpeedPanel && (
-              <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
-                className="absolute top-12 right-0 glass-panel rounded-2xl p-4 border border-white/10 shadow-xl w-52 z-50">
-                <p className="text-[10px] font-mono uppercase text-primary/70 mb-3 tracking-wider flex items-center gap-1.5">
-                  <Volume2 className="w-3 h-3" /> Velocidad TTS
-                </p>
-                <input type="range" min={0.7} max={2.0} step={0.1} value={ttsSpeed}
-                  onChange={e => setTtsSpeed(parseFloat(e.target.value))}
-                  className="w-full accent-primary cursor-pointer" />
-                <div className="flex justify-between text-[10px] text-white/40 font-mono mt-1">
-                  <span>Lento</span>
-                  <span className="text-primary">{ttsSpeed.toFixed(1)}×</span>
-                  <span>Rápido</span>
-                </div>
-              </motion.div>
+
+          {/* Configuración */}
+          <Link href="/settings">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/10 w-8 h-8 sm:w-9 sm:h-9"
+              title="Configuración"
+            >
+              <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            </Button>
+          </Link>
+
+          {/* Historial / Transcripción */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleToggleTranscript}
+            className="relative rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-white/70 hover:text-white hover:bg-white/10 w-8 h-8 sm:w-9 sm:h-9"
+            title="Historial de mensajes (H)"
+          >
+            <History className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-[9px] font-mono text-black font-bold flex items-center justify-center shadow-[0_0_8px_rgba(0,210,255,0.8)]">
+                {unreadCount}
+              </span>
             )}
-          </AnimatePresence>
-        </div>
-
-        {/* Compartir */}
-        <Button variant="ghost" size="icon" onClick={shareLastMessage} disabled={!lastAiMsg}
-          className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10 disabled:opacity-25" title="Compartir">
-          <Share2 className="w-4 h-4" />
-        </Button>
-
-        {/* Nueva conversación */}
-        <Button variant="ghost" size="icon" onClick={resetConversation}
-          className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Nueva (N)">
-          <RotateCcw className="w-4 h-4" />
-        </Button>
-
-        {/* Guardar */}
-        <Button variant="ghost" size="icon" onClick={saveConversation} disabled={history.length === 0}
-          className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10 disabled:opacity-25" title="Guardar">
-          <Save className="w-4 h-4" />
-        </Button>
-
-        {/* Exportar */}
-        <Button variant="ghost" size="icon" onClick={exportConversation} disabled={history.length === 0}
-          className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10 disabled:opacity-25" title="Exportar .txt">
-          <Download className="w-4 h-4" />
-        </Button>
-
-        {/* Tema */}
-        <div className="relative">
-          <Button variant="ghost" size="icon"
-            onClick={() => { setShowThemePicker(v => !v); setShowSpeedPanel(false); }}
-            className="rounded-full bg-background/20 backdrop-blur-md border border-white/10 text-white/60 hover:text-white hover:bg-white/15 w-10 h-10" title="Tema">
-            <Palette className="w-4 h-4" />
           </Button>
-          <AnimatePresence>
-            {showThemePicker && (
-              <motion.div initial={{ opacity: 0, y: -6, scale: 0.94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -6, scale: 0.94 }}
-                className="absolute top-12 right-0 glass-panel rounded-2xl p-3 border border-white/10 shadow-xl flex flex-col gap-1 min-w-[130px] z-50">
-                {themes.map(t => (
-                  <button key={t.name} onClick={() => { setTheme(t.name as ThemeName); setShowThemePicker(false); }}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-mono transition-colors ${
-                      theme.name === t.name ? 'bg-white/15 text-white' : 'text-white/55 hover:bg-white/8 hover:text-white/90'
-                    }`}>
-                    <span className="w-3 h-3 rounded-full ring-1 ring-white/20" style={{ backgroundColor: t.hex }} />
-                    {t.label}
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
-      </div>
+      </header>
 
-      {/* Nombre + género */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none text-center">
-        <motion.p key={avatarName}
-          initial={{ opacity: 0, letterSpacing: '0.6em' }}
-          animate={{ opacity: 0.35, letterSpacing: '0.35em' }}
-          transition={{ duration: 1.4 }}
-          className="text-xs font-mono uppercase text-primary">
-          {avatarName}
-        </motion.p>
-        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 0.22 }}
-          className="text-[9px] font-mono uppercase text-white/30 tracking-widest mt-0.5">
-          {avatarGender === 'female' ? '♀ Femenino · 3D' : '♂ Masculino · 3D'}
-        </motion.p>
-      </div>
-
-      {/* ── Avatar 3D ── */}
+      {/* ── Avatar 3D Personalizado ── */}
       <div
         className="absolute inset-0 flex items-center justify-center z-10"
         onClick={handleAvatarTap}
         style={{ cursor: status === 'speaking' ? 'pointer' : 'default' }}>
         <motion.div className="w-full h-full flex items-center justify-center"
-          initial={{ opacity: 0, scale: 0.88 }}
+          initial={{ opacity: 0, scale: 0.94 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 1.8, ease: 'easeOut' }}>
+          transition={{ duration: 1.5, ease: 'easeOut' }}>
           <Avatar
             status={status}
             mouthOpenAmount={mouthOpenAmount}
             micLevel={micLevel}
             theme={theme}
-            gender={avatarGender}
           />
         </motion.div>
       </div>
 
-      {/* Pensando */}
-      <div className="absolute bottom-52 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+      {/* Indicador de Pensando */}
+      <div className="absolute bottom-36 sm:bottom-44 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
         <ThinkingIndicator active={status === 'thinking'} />
       </div>
 
-      {/* Interrumpir */}
+      {/* Botón Flotante para Interrumpir */}
       <AnimatePresence>
         {status === 'speaking' && (
           <motion.div key="intr"
             initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
-            className="absolute top-1/2 -translate-y-1/2 right-5 z-40 flex flex-col items-center gap-1">
+            className="absolute top-1/2 -translate-y-1/2 right-4 sm:right-6 z-40 flex flex-col items-center gap-1">
             <Button onClick={interruptSpeech} size="icon"
-              className="rounded-full w-14 h-14 bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 text-red-400 shadow-[0_0_20px_rgba(255,50,50,0.3)]"
+              className="rounded-full w-10 h-10 sm:w-12 sm:h-12 bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 text-red-400 shadow-[0_0_20px_rgba(255,50,50,0.3)]"
               title="Interrumpir (Esc)">
-              <StopCircle className="w-7 h-7" />
+              <StopCircle className="w-5 h-5 sm:w-6 sm:h-6" />
             </Button>
-            <p className="text-[9px] font-mono text-red-400/50 uppercase tracking-wider">Esc</p>
+            <p className="text-[9px] font-mono text-red-400/50 uppercase tracking-wider hidden sm:block">Esc</p>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Subtítulo */}
+      {/* Subtítulos de la Respuesta de IA */}
       <AnimatePresence>
         {status === 'speaking' && lastAiMsg && (
           <motion.div key="cap"
             initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="absolute bottom-52 left-1/2 -translate-x-1/2 w-[80%] max-w-xl z-30 pointer-events-none">
-            <div className="glass-panel rounded-2xl px-5 py-3 border border-secondary/20 text-center">
-              <p className="text-sm text-white/80 font-light leading-relaxed line-clamp-3">{lastAiMsg}</p>
+            className="absolute bottom-36 sm:bottom-44 left-1/2 -translate-x-1/2 w-[90%] sm:w-[85%] max-w-lg z-30 pointer-events-none">
+            <div className="glass-panel rounded-2xl px-4 py-2.5 sm:px-5 sm:py-3 border border-white/10 text-center shadow-2xl backdrop-blur-xl bg-black/50">
+              <p className="text-xs sm:text-sm text-white/90 font-light leading-relaxed line-clamp-3">{lastAiMsg}</p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Error */}
+      {/* Alerta de Error amigable */}
       <AnimatePresence>
         {lastError && !isProcessing && !isRecording && (
           <motion.div key="err"
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="absolute bottom-52 left-1/2 -translate-x-1/2 z-30 max-w-xs">
-            <div className="px-4 py-2 rounded-full bg-red-900/40 border border-red-500/40 text-red-300 text-xs font-mono text-center">
+            className="absolute bottom-36 sm:bottom-44 left-1/2 -translate-x-1/2 z-30 max-w-xs w-[88%]">
+            <div className="px-4 py-2 rounded-full bg-red-900/60 border border-red-500/40 text-red-200 text-xs font-mono text-center shadow-lg">
               ⚠ {lastError}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Controles de voz */}
+      {/* ── Controles de voz y texto inferiores ── */}
       <div className="relative z-40">
         <VoiceControl
           status={status}
@@ -415,13 +272,11 @@ export default function MirrorPage() {
           stopRecording={stopRecording}
           analyser={analyser}
           lastTranscript={lastTranscript}
-          handsFree={handsFree}
-          onToggleHandsFree={() => setHandsFree(v => !v)}
           onTextSubmit={handleTextSubmit}
         />
       </div>
 
-      {/* Transcripción */}
+      {/* ── Panel lateral de Transcripción ── */}
       <div className="relative z-50">
         <TranscriptPanel
           messages={history}
