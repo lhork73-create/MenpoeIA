@@ -25,7 +25,7 @@ function statusAccentColor(status: AvatarStatus): THREE.Color {
 // OBJ MESH LOADER — imperative mesh management in its own group
 // ═══════════════════════════════════════════════════════════════════════════════
 interface ObjMeshProps {
-  onReady: () => void;
+  onReady?: () => void;
 }
 
 function ObjMesh({ onReady }: ObjMeshProps) {
@@ -65,7 +65,7 @@ function ObjMesh({ onReady }: ObjMeshProps) {
       // The mesh Y-offset of 0.05 keeps the face centered in view
       mesh.position.set(0, 0.05, 0);
       groupRef.current.add(mesh);
-      onReady();
+      onReady?.();
     }).catch(console.error);
 
     return () => { cancelled = true; };
@@ -75,309 +75,7 @@ function ObjMesh({ onReady }: ObjMeshProps) {
   return <group ref={groupRef} />;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// EYELID RIG — independent 3D geometry animated on top of the face
-// Eye coords (in neckPivot space, accounting for rootGroup Y-offset and mesh Y+0.05):
-//   The face mesh sits at neckPivot.y=0 + mesh.y=0.05 → face center at y≈0
-//   Based on model analysis (Y range -0.45 to +0.45, eye region above center):
-//   Eyes are approx at world-y = 0.175, x = ±0.095, z = 0.19 (front of face)
-// ═══════════════════════════════════════════════════════════════════════════════
-interface EyelidRigProps {
-  side: 'left' | 'right';
-  blinkState: React.MutableRefObject<BlinkState>;
-  gazeRef: React.MutableRefObject<{ x: number; y: number }>;
-}
 
-interface BlinkState {
-  phase: number;
-  blinking: boolean;
-  nextBlink: number;
-  closeness: number; // 0 = open, 1 = fully closed
-}
-
-function EyelidRig({ side, blinkState, gazeRef }: EyelidRigProps) {
-  const upperLidRef  = useRef<THREE.Mesh>(null!);
-  const lowerLidRef  = useRef<THREE.Mesh>(null!);
-  const eyeballRef   = useRef<THREE.Mesh>(null!);
-  const pupilRef     = useRef<THREE.Mesh>(null!);
-  const catchlightRef = useRef<THREE.Mesh>(null!);
-
-  // Eye anchor positions in scene space
-  const xSign = side === 'left' ? -1 : 1;
-  const EYE_X  =  xSign * 0.095;
-  const EYE_Y  =  0.230; // eye center Y (within neckPivot space)
-  const EYE_Z  =  0.190; // forward
-
-  // Upper lid: half-ellipse arc
-  const upperGeo = useMemo(() => {
-    const s = new THREE.Shape();
-    const W = 0.044, H = 0.024;
-    s.moveTo(-W, 0);
-    s.bezierCurveTo(-W * 0.9, H * 1.5, W * 0.9, H * 1.5, W, 0);
-    s.lineTo(-W, 0);
-    return new THREE.ShapeGeometry(s, 24);
-  }, []);
-
-  // Lower lid: gentle downward curve
-  const lowerGeo = useMemo(() => {
-    const s = new THREE.Shape();
-    const W = 0.044, H = 0.012;
-    s.moveTo(-W, 0);
-    s.bezierCurveTo(-W * 0.7, -H, W * 0.7, -H, W, 0);
-    s.lineTo(-W, 0);
-    return new THREE.ShapeGeometry(s, 24);
-  }, []);
-
-  const eyeballGeo   = useMemo(() => new THREE.SphereGeometry(0.030, 24, 18), []);
-  const pupilGeo     = useMemo(() => new THREE.CircleGeometry(0.016, 24), []);
-  const catchlightGeo = useMemo(() => new THREE.CircleGeometry(0.004, 12), []);
-
-  // Skin-tone lid material (matches model texture tone)
-  const lidMat = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#C48B6A',
-    roughness: 0.8,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-    depthTest: true,
-    depthWrite: true,
-  }), []);
-
-  const scleraMat = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#F5F0EA',
-    roughness: 0.5,
-    metalness: 0.02,
-  }), []);
-
-  const pupilMat = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#100800',
-    roughness: 1.0,
-    metalness: 0.0,
-    side: THREE.FrontSide,
-    depthTest: true,
-    depthWrite: false,
-  }), []);
-
-  const catchlightMat = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#FFFFFF',
-    emissive: '#AAAAAA',
-    roughness: 0.1,
-    metalness: 0.2,
-    side: THREE.FrontSide,
-    depthTest: true,
-    depthWrite: false,
-  }), []);
-
-  useFrame((state) => {
-    const t   = state.clock.getElapsedTime();
-    const blink = blinkState.current;
-
-    // ── Blink state machine ──
-    if (!blink.blinking && t > blink.nextBlink) {
-      blink.blinking = true;
-      blink.phase = 0;
-    }
-    if (blink.blinking) {
-      blink.phase += 0.20;
-      // One full sine wave = one blink cycle
-      blink.closeness = Math.max(0, Math.sin(blink.phase));
-      if (blink.phase >= Math.PI) {
-        blink.blinking = false;
-        blink.closeness = 0;
-        // Random interval 2.5–6s
-        blink.nextBlink = t + 2.5 + Math.random() * 3.5;
-      }
-    } else {
-      blink.closeness = THREE.MathUtils.lerp(blink.closeness, 0, 0.15);
-    }
-
-    // ── Smooth gaze offset for eyeballs ──
-    const gx = gazeRef.current.x * 0.010;
-    const gy = gazeRef.current.y * 0.006;
-
-    // ── Micro flutter for organic feel ──
-    const micro = Math.sin(t * 0.9) * 0.001 + Math.cos(t * 2.3) * 0.0005;
-
-    const openAmount = 1.0 - blink.closeness;
-
-    // Upper lid: scaleY controls closing (pivot from top = position adjusts)
-    if (upperLidRef.current) {
-      upperLidRef.current.scale.y = Math.max(0.04, openAmount);
-      // When closed, the lid descends; keep anchor at top of eye
-      upperLidRef.current.position.set(
-        EYE_X + gx * 0.1,
-        EYE_Y + 0.014 + micro,
-        EYE_Z + 0.028
-      );
-    }
-
-    // Lower lid: slight rise on blink
-    if (lowerLidRef.current) {
-      lowerLidRef.current.position.set(
-        EYE_X + gx * 0.1,
-        EYE_Y - 0.016 + blink.closeness * 0.006 + micro,
-        EYE_Z + 0.026
-      );
-    }
-
-    // Eyeball + pupil follow gaze
-    const eyeVisible = blink.closeness < 0.85;
-    if (eyeballRef.current) {
-      eyeballRef.current.visible = eyeVisible;
-      eyeballRef.current.position.set(EYE_X + gx, EYE_Y + gy, EYE_Z - 0.002);
-    }
-    if (pupilRef.current) {
-      pupilRef.current.visible = eyeVisible;
-      pupilRef.current.position.set(EYE_X + gx, EYE_Y + gy, EYE_Z + 0.025);
-    }
-    if (catchlightRef.current) {
-      catchlightRef.current.visible = eyeVisible;
-      catchlightRef.current.position.set(EYE_X + gx + 0.007, EYE_Y + gy + 0.007, EYE_Z + 0.026);
-    }
-  });
-
-  return (
-    <group>
-      {/* White sclera eyeball */}
-      <mesh ref={eyeballRef} position={[EYE_X, EYE_Y, EYE_Z - 0.002]}
-        geometry={eyeballGeo} material={scleraMat} renderOrder={0} />
-
-      {/* Dark pupil/iris disc */}
-      <mesh ref={pupilRef} position={[EYE_X, EYE_Y, EYE_Z + 0.025]}
-        geometry={pupilGeo} material={pupilMat} renderOrder={1} />
-
-      {/* Catch-light specular dot */}
-      <mesh ref={catchlightRef} position={[EYE_X + 0.007, EYE_Y + 0.007, EYE_Z + 0.026]}
-        geometry={catchlightGeo} material={catchlightMat} renderOrder={2} />
-
-      {/* Upper eyelid */}
-      <mesh ref={upperLidRef} position={[EYE_X, EYE_Y + 0.014, EYE_Z + 0.028]}
-        geometry={upperGeo} material={lidMat} renderOrder={3} />
-
-      {/* Lower eyelid */}
-      <mesh ref={lowerLidRef} position={[EYE_X, EYE_Y - 0.016, EYE_Z + 0.026]}
-        geometry={lowerGeo} material={lidMat} renderOrder={3} />
-    </group>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MOUTH RIG — 3D animated lips that open when speaking
-// Mouth position: below nose, approx EYE_Y - 0.24 → Y ≈ -0.01, Z = 0.200
-// ═══════════════════════════════════════════════════════════════════════════════
-interface MouthRigProps {
-  status: AvatarStatus;
-  mouthOpenAmount: number;
-}
-
-function MouthRig({ status, mouthOpenAmount }: MouthRigProps) {
-  const upperLipRef    = useRef<THREE.Mesh>(null!);
-  const lowerLipRef    = useRef<THREE.Mesh>(null!);
-  const mouthOpenRef   = useRef<THREE.Mesh>(null!);
-
-  // Mouth open target with smoothing
-  const smoothOpen = useRef(0);
-
-  const MOUTH_Y = -0.015;
-  const MOUTH_Z = 0.200;
-
-  // Upper lip M-shape (Cupid's bow)
-  const upperLipGeo = useMemo(() => {
-    const s = new THREE.Shape();
-    const W = 0.048, H = 0.016;
-    s.moveTo(-W, 0);
-    // Left peak
-    s.bezierCurveTo(-W * 0.7, H * 0.8, -W * 0.3, H * 1.2, 0, H * 0.5);
-    // Right peak
-    s.bezierCurveTo(W * 0.3, H * 1.2, W * 0.7, H * 0.8, W, 0);
-    // Bottom curve back
-    s.bezierCurveTo(W * 0.5, -H * 0.4, -W * 0.5, -H * 0.4, -W, 0);
-    return new THREE.ShapeGeometry(s, 28);
-  }, []);
-
-  // Lower lip (fuller)
-  const lowerLipGeo = useMemo(() => {
-    const s = new THREE.Shape();
-    const W = 0.050, H = 0.020;
-    s.moveTo(-W, 0);
-    s.bezierCurveTo(-W * 0.6, -H * 1.2, W * 0.6, -H * 1.2, W, 0);
-    s.bezierCurveTo(W * 0.4, H * 0.5, -W * 0.4, H * 0.5, -W, 0);
-    return new THREE.ShapeGeometry(s, 28);
-  }, []);
-
-  // Mouth interior (dark gap when open)
-  const mouthOpenGeo = useMemo(() => new THREE.PlaneGeometry(0.072, 0.030), []);
-
-  const lipMat = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#B5675E',
-    roughness: 0.55,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-    depthWrite: true,
-  }), []);
-
-  const mouthDarkMat = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#0D0304',
-    roughness: 1.0,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-    depthWrite: true,
-  }), []);
-
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime();
-
-    // Target openness
-    let target = mouthOpenAmount;
-    if (status === 'speaking') {
-      // Organic speech: two overlapping sine waves
-      const w1 = Math.abs(Math.sin(t * 9.2)) * 0.5;
-      const w2 = Math.abs(Math.sin(t * 5.7 + 0.8)) * 0.4;
-      const speechWave = Math.min(1.0, w1 + w2);
-      target = Math.max(mouthOpenAmount, speechWave * 0.9);
-    } else if (status === 'idle' || status === 'thinking' || status === 'listening') {
-      target = 0;
-    }
-
-    // Smooth transition
-    smoothOpen.current = THREE.MathUtils.lerp(smoothOpen.current, target, 0.18);
-    const open = smoothOpen.current;
-
-    if (upperLipRef.current) {
-      upperLipRef.current.position.y = MOUTH_Y + open * 0.020;
-    }
-    if (lowerLipRef.current) {
-      lowerLipRef.current.position.y = MOUTH_Y - 0.018 - open * 0.026;
-    }
-    if (mouthOpenRef.current) {
-      const showing = open > 0.04;
-      mouthOpenRef.current.visible = showing;
-      if (showing) {
-        mouthOpenRef.current.scale.y = open;
-        mouthOpenRef.current.scale.x = 0.4 + open * 0.6;
-        mouthOpenRef.current.position.y = MOUTH_Y - 0.009 - open * 0.006;
-      }
-    }
-  });
-
-  return (
-    <group>
-      {/* Dark interior (behind lips) */}
-      <mesh ref={mouthOpenRef}
-        position={[0, MOUTH_Y - 0.009, MOUTH_Z - 0.003]}
-        geometry={mouthOpenGeo} material={mouthDarkMat} renderOrder={1} />
-
-      {/* Upper lip */}
-      <mesh ref={upperLipRef}
-        position={[0, MOUTH_Y, MOUTH_Z + 0.006]}
-        geometry={upperLipGeo} material={lipMat} renderOrder={2} />
-
-      {/* Lower lip */}
-      <mesh ref={lowerLipRef}
-        position={[0, MOUTH_Y - 0.018, MOUTH_Z + 0.004]}
-        geometry={lowerLipGeo} material={lipMat} renderOrder={2} />
-    </group>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN AVATAR: OBJ model + 3D rig overlay + head animation
@@ -387,23 +85,12 @@ interface PristineDesktopAvatarProps {
   mouthOpenAmount: number;
 }
 
-function PristineDesktopAvatar({ status, mouthOpenAmount }: PristineDesktopAvatarProps) {
+function PristineDesktopAvatar({ status }: PristineDesktopAvatarProps) {
   const rootGroupRef  = useRef<THREE.Group>(null!);
   const neckPivotRef  = useRef<THREE.Group>(null!);
 
   const mouseGaze = useRef({ x: 0, y: 0, targetX: 0, targetY: 0 });
   const headRot   = useRef({ yaw: 0, pitch: 0, roll: 0 });
-  const gazeRef   = useRef({ x: 0, y: 0 });
-
-  // Shared blink state for both eyes (they blink together)
-  const blinkState = useRef<BlinkState>({
-    phase: 0,
-    blinking: false,
-    nextBlink: 2.0,
-    closeness: 0,
-  });
-
-  const [meshReady, setMeshReady] = useState(false);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -425,8 +112,6 @@ function PristineDesktopAvatar({ status, mouthOpenAmount }: PristineDesktopAvata
 
     mouseGaze.current.x = THREE.MathUtils.lerp(mouseGaze.current.x, mouseGaze.current.targetX, 0.07);
     mouseGaze.current.y = THREE.MathUtils.lerp(mouseGaze.current.y, mouseGaze.current.targetY, 0.07);
-    gazeRef.current.x   = THREE.MathUtils.lerp(gazeRef.current.x,   mouseGaze.current.x,       0.10);
-    gazeRef.current.y   = THREE.MathUtils.lerp(gazeRef.current.y,   mouseGaze.current.y,       0.10);
 
     const gazeYaw   = THREE.MathUtils.clamp(mouseGaze.current.x *  0.18, -0.20,  0.20);
     const gazePitch = THREE.MathUtils.clamp(mouseGaze.current.y * -0.09, -0.09,  0.09);
@@ -459,8 +144,8 @@ function PristineDesktopAvatar({ status, mouthOpenAmount }: PristineDesktopAvata
     neckPivotRef.current.rotation.set(headRot.current.pitch, headRot.current.yaw, headRot.current.roll);
     if (rootGroupRef.current) {
       const isMobile = typeof window !== 'undefined' && (window.innerWidth < 768 || window.innerWidth < window.innerHeight);
-      const targetScale = isMobile ? 0.60 : 0.88;
-      const targetY = (isMobile ? 0.05 : -0.14) + breathY;
+      const targetScale = isMobile ? 0.78 : 0.88;
+      const targetY = (isMobile ? -0.06 : -0.14) + breathY;
       rootGroupRef.current.position.set(0, targetY, 0);
       rootGroupRef.current.scale.setScalar(targetScale);
     }
@@ -469,18 +154,8 @@ function PristineDesktopAvatar({ status, mouthOpenAmount }: PristineDesktopAvata
   return (
     <group ref={rootGroupRef} position={[0, -0.14, 0]} scale={0.88} dispose={null}>
       <group ref={neckPivotRef} position={[0, -0.05, 0]}>
-
-        {/* ── Original OBJ mesh (separate group, no imperative children cleared) ── */}
-        <ObjMesh onReady={() => setMeshReady(true)} />
-
-        {/* ── 3D Rig overlays: appear after mesh loads ── */}
-        {meshReady && (
-          <>
-            <EyelidRig side="left"  blinkState={blinkState} gazeRef={gazeRef} />
-            <EyelidRig side="right" blinkState={blinkState} gazeRef={gazeRef} />
-            <MouthRig status={status} mouthOpenAmount={mouthOpenAmount} />
-          </>
-        )}
+        {/* ── Modelo fotográfico 3D original limpio y ultra-realista ── */}
+        <ObjMesh />
       </group>
     </group>
   );
@@ -513,14 +188,12 @@ function ResponsiveCamera() {
       const isMobile = size.width < 768 || size.width < size.height;
       if (isMobile) {
         // En móviles verticales (smartphones):
-        // Con la relación de aspecto vertical de smartphones (~9:20), la cámara se aleja
-        // a Z=3.10 y sube a Y=0.22 con fov=36. Junto con targetScale=0.60, el avatar
-        // queda perfectamente proporcionado, con hombros y cuello visibles, en el tercio
-        // superior de la pantalla y sin invadir los controles de voz inferiores.
-        camera.position.set(0, 0.22, 3.10);
-        camera.fov = 36;
+        // Encuadre mediano ideal: cabeza nítida y destacada, con hombros y camisa visibles,
+        // sin tocar los bordes laterales y dejando la mitad inferior libre para el micrófono.
+        camera.position.set(0, 0.10, 2.15);
+        camera.fov = 32;
       } else {
-        // En pantallas horizontales (PC, laptops): encuadre nítido y cercano
+        // En pantallas horizontales (PC, laptops): encuadre cinematográfico cercano
         camera.position.set(0, 0.06, 1.35);
         camera.fov = 30;
       }
