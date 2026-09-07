@@ -1,11 +1,10 @@
-﻿import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+﻿export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
-  
+
   if (req.method === 'GET') {
     return res.json({
       aiName: 'Mirror',
@@ -15,5 +14,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ttsEnabled: true,
     });
   }
+
   return res.status(405).json({ error: 'Method not allowed' });
 }

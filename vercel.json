@@ -1,17 +1,10 @@
 ﻿{
-  "version": 2,
-  "buildCommand": "cd artifacts/magic-mirror && npx vite build --config vite.config.ts",
+  "buildCommand": "pnpm --filter @workspace/magic-mirror run build",
   "outputDirectory": "artifacts/magic-mirror/dist/public",
-  "installCommand": "npm install -g pnpm && pnpm install",
-  "functions": {
-    "api/chat.ts": { "memory": 256, "maxDuration": 30 },
-    "api/transcribe.ts": { "memory": 512, "maxDuration": 30 },
-    "api/settings.ts": { "memory": 128, "maxDuration": 10 }
-  },
   "rewrites": [
-    { "source": "/api/chat", "destination": "/api/chat" },
-    { "source": "/api/transcribe", "destination": "/api/transcribe" },
-    { "source": "/api/settings", "destination": "/api/settings" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
