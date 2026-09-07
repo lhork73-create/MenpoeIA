@@ -3,19 +3,15 @@ export const GEMINI_API_KEY =
   (import.meta as any).env?.GEMINI_API_KEY ||
   "";
 
-// Modelos verificados como activos (en orden de preferencia)
+// Modelos verificados con respuesta 200 en vivo
 const GEMINI_CHAT_MODELS = [
   "gemini-3.5-flash",
-  "gemini-3.6-flash",
-  "gemini-3.7-flash",
-  "gemini-3.8-flash",
   "gemini-flash-latest",
 ];
 
 const GEMINI_TRANSCRIBE_MODELS = [
   "gemini-3.5-flash",
-  "gemini-3.5-transcribe",
-  "gemini-3.6-flash",
+  "gemini-flash-latest",
 ];
 
 export interface GeminiMessage {

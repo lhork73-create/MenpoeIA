@@ -11,6 +11,7 @@ interface VoiceControlProps {
   isProcessing: boolean;
   startRecording: () => void;
   stopRecording: () => void;
+  toggleRecording: () => void;
   analyser?: AnalyserNode | null;
   lastTranscript?: string;
   handsFree?: boolean;
@@ -24,6 +25,7 @@ export function VoiceControl({
   isProcessing,
   startRecording,
   stopRecording,
+  toggleRecording,
   analyser,
   lastTranscript,
   onTextSubmit,
@@ -35,16 +37,8 @@ export function VoiceControl({
   const [showText, setShowText]   = useState(false);
   const [textInput, setTextInput] = useState('');
 
-  const lastClickTimeRef = useRef(0);
-  const isRecordingRef   = useRef(isRecording);
-  const isProcessingRef  = useRef(isProcessing);
-  const startRecRef      = useRef(startRecording);
-  const stopRecRef       = useRef(stopRecording);
-
-  isRecordingRef.current  = isRecording;
-  isProcessingRef.current = isProcessing;
-  startRecRef.current     = startRecording;
-  stopRecRef.current      = stopRecording;
+  const toggleRecRef = useRef(toggleRecording);
+  toggleRecRef.current = toggleRecording;
 
   // ── Visualizador de onda de audio en vivo ─────────────────────────────────
   useEffect(() => {
@@ -99,12 +93,9 @@ export function VoiceControl({
 
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault();
-        if (isProcessingRef.current) return;
-        if (isRecordingRef.current) {
-          stopRecRef.current();
-        } else {
-          startRecRef.current();
-        }
+        if (isProcessing) return;
+        unlockAudio();
+        toggleRecRef.current();
       }
 
       if ((e.key === 't' || e.key === 'T') && !e.ctrlKey && !e.metaKey) {
@@ -114,25 +105,13 @@ export function VoiceControl({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [isProcessing]);
 
-  // ── Acción del botón de micrófono (Toggle fiable y sin falsos cortes) ──────
+  // ── Acción del botón de micrófono: Toggle directo (Hablar <-> Enviar) ──────
   const handleMicClick = () => {
-    if (isProcessingRef.current) return;
+    if (isProcessing) return;
     unlockAudio();
-
-    // Debounce de 350ms para evitar dobles toques accidentales en móviles y PC
-    const now = Date.now();
-    if (now - lastClickTimeRef.current < 350) return;
-    lastClickTimeRef.current = now;
-
-    if (isRecordingRef.current) {
-      // Terminar de hablar y enviar el audio
-      stopRecRef.current();
-    } else {
-      // Iniciar grabación de audio
-      startRecRef.current();
-    }
+    toggleRecRef.current();
   };
 
   // ── Entrada de texto manual ───────────────────────────────────────────────
@@ -150,12 +129,12 @@ export function VoiceControl({
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   const label = isRecording
-    ? `🔴 Escuchando... Di tu mensaje (se envía solo al pausar) (${fmt(recSecs)})`
+    ? `🔴 Grabando (${fmt(recSecs)})... Presiona el botón rojo para ENVIAR`
     : isProcessing
-    ? 'Mirror está pensando la respuesta...'
+    ? 'Mirror está procesando tu mensaje...'
     : isSpeaking
     ? 'Mirror está hablando... (toca para pausar)'
-    : 'Toca para hablar · Usa [T] para escribir';
+    : 'Presiona para hablar · Presiona de nuevo para enviar';
 
   return (
     <div className="fixed bottom-6 sm:bottom-7 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 sm:gap-2.5 z-40 w-[94%] max-w-sm sm:max-w-md select-none pointer-events-auto">
@@ -206,7 +185,7 @@ export function VoiceControl({
               className="relative z-10 flex items-center gap-2 text-red-400 text-xs sm:text-sm font-mono font-semibold"
             >
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.9)]" />
-              ESCUDANDO · {fmt(recSecs)}
+              GRABANDO · {fmt(recSecs)} (Presiona para enviar)
             </motion.div>
           ) : isProcessing ? (
             <motion.div
@@ -217,7 +196,7 @@ export function VoiceControl({
               className="relative z-10 flex items-center gap-2 text-primary text-xs font-mono uppercase tracking-wider"
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Procesando audio...
+              Pensando respuesta...
             </motion.div>
           ) : lastTranscript && status === 'idle' ? (
             <motion.div

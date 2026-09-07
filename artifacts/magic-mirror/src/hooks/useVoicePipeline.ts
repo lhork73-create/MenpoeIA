@@ -152,7 +152,7 @@ export function useVoicePipeline(
   const speechRecognitionRef    = useRef<any>(null);
   const speechRecognitionTextRef = useRef<string>('');
   const chunksRef = useRef<Blob[]>([]);
-  const vadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isStartingRef = useRef<boolean>(false);
 
   const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
   const settingsRef = useRef(settings);
@@ -237,9 +237,9 @@ export function useVoicePipeline(
   }, [setStatus, setSpeakingVolume]);
 
   // ── Limpieza de audio ────────────────────────────────────────────────────
+  // ── Limpieza de audio ────────────────────────────────────────────────────
   const cleanupAudio = useCallback(() => {
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-    if (vadTimerRef.current) { clearInterval(vadTimerRef.current); vadTimerRef.current = null; }
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach(t => t.stop());
       audioStreamRef.current = null;
@@ -260,11 +260,15 @@ export function useVoicePipeline(
     try {
       return await generateGeminiReply(userText, currentHistory, finalPrompt);
     } catch (geminiErr) {
-      console.warn('[VoicePipeline] Gemini client failed, trying backend...', geminiErr);
-      const chatRes = await chatMutation.mutateAsync({
-        data: { message: userText, history: currentHistory, systemPrompt: finalPrompt },
-      });
-      return { text: chatRes.message, tokensUsed: chatRes.tokensUsed ?? 0 };
+      console.warn('[VoicePipeline] Gemini direct call failed, trying backend...', geminiErr);
+      try {
+        const chatRes = await chatMutation.mutateAsync({
+          data: { message: userText, history: currentHistory, systemPrompt: finalPrompt },
+        });
+        return { text: chatRes.message, tokensUsed: chatRes.tokensUsed ?? 0 };
+      } catch (backendErr) {
+        throw geminiErr;
+      }
     }
   }, [chatMutation]);
 
@@ -306,81 +310,67 @@ export function useVoicePipeline(
       historyRef.current = finalHistory;
       setTokensTotal(prev => prev + replyTokens);
       setIsProcessing(false);
+      isProcessingRef.current = false;
 
       await speak(replyMessage);
     } catch (err) {
+      setIsProcessing(false);
+      isProcessingRef.current = false;
+      setStatus('idle');
       throw err;
     }
-  }, [sessionStart, callGeminiChat, speak]);
+  }, [sessionStart, callGeminiChat, speak, setStatus]);
 
   // ── Procesar blob de audio ────────────────────────────────────────────────
   const handleAudioBlob = useCallback(async (blob: Blob, mimeType: string) => {
     setIsProcessing(true);
+    isProcessingRef.current = true;
     setLastError(null);
     setStatus('thinking');
 
-    console.log('[VoicePipeline] handleAudioBlob called, size:', blob.size, 'mime:', mimeType);
+    const recDuration = Date.now() - recordingStartTimeRef.current;
+    console.log('[VoicePipeline] handleAudioBlob: size =', blob.size, 'bytes, duration =', recDuration, 'ms');
+
+    // Descartar solo si fue un toque accidental instantáneo (menos de 200ms o menos de 50 bytes)
+    if (blob.size < 50 || recDuration < 200) {
+      setStatus('idle');
+      setIsProcessing(false);
+      isProcessingRef.current = false;
+      toast({
+        title: 'Grabación muy breve',
+        description: 'Toca el botón para empezar a hablar, di tu mensaje y vuelve a tocarlo para enviar.',
+      });
+      return;
+    }
 
     try {
-      const recDuration = Date.now() - recordingStartTimeRef.current;
-      console.log('[VoicePipeline] Recording duration:', recDuration, 'ms');
+      // Breve pausa para captar los últimos resultados de SpeechRecognition si estaba activo
+      await new Promise(r => setTimeout(r, 300));
 
-      // Umbral reducido: 80 bytes y 150ms para admitir respuestas breves ("Sí", "Hola", etc.)
-      if (blob.size < 80 || recDuration < 150) {
-        setStatus('idle');
-        setIsProcessing(false);
-        toast({
-          title: 'Audio muy breve',
-          description: 'Mantén pulsado o habla después de pulsar. También puedes usar el botón [T] para escribir.',
-        });
-        return;
-      }
-
-      // Esperar un poco a que SpeechRecognition procese sus resultados finales
-      await new Promise(r => setTimeout(r, 400));
-
-      // 1. Prioridad: Reconocimiento nativo continuo del navegador
       let userText = speechRecognitionTextRef.current.trim();
-      console.log('[VoicePipeline] SpeechRecognition text:', userText || '(empty)');
+      console.log('[VoicePipeline] Native SpeechRecognition text:', userText || '(empty)');
 
-      // 2. Si no hubo texto, transcribir con Gemini Multimodal
+      // Fallback a transcripción multimodal de Gemini
       if (!userText) {
         try {
           const base64 = await blobToBase64(blob);
-          if (base64 && base64.length > 100) {
-            const cleanMime = mimeType.split(';')[0] || 'audio/webm';
-            console.log('[VoicePipeline] Trying Gemini audio transcription, mime:', cleanMime);
-            userText = (await transcribeAudioWithGemini(base64, cleanMime)).trim();
+          if (base64 && base64.length > 50) {
+            console.log('[VoicePipeline] Transcribing audio with Gemini...');
+            userText = (await transcribeAudioWithGemini(base64, mimeType)).trim();
             console.log('[VoicePipeline] Gemini transcription result:', userText || '(empty)');
           }
-        } catch (geminiTransErr) {
-          console.warn('[VoicePipeline] Gemini transcription failed:', geminiTransErr);
-        }
-      }
-
-      // 3. Fallback al backend /api/transcribe
-      if (!userText) {
-        try {
-          const base64 = await blobToBase64(blob);
-          if (base64 && base64.length > 100) {
-            console.log('[VoicePipeline] Trying backend transcription...');
-            const transcribeRes = await transcribeMutation.mutateAsync({
-              data: { audioBase64: base64, mimeType: mimeType || 'audio/webm' },
-            });
-            userText = transcribeRes.text?.trim() ?? '';
-            console.log('[VoicePipeline] Backend transcription result:', userText || '(empty)');
-          }
-        } catch (backendErr) {
-          console.warn('[VoicePipeline] Backend transcription failed:', backendErr);
+        } catch (geminiErr) {
+          console.warn('[VoicePipeline] Gemini transcription failed:', geminiErr);
         }
       }
 
       if (!userText) {
         setStatus('idle');
         setIsProcessing(false);
+        isProcessingRef.current = false;
         toast({
           title: 'No se detectó voz',
-          description: 'No se escuchó voz. Usa el teclado (ícono T) para escribir tu mensaje.',
+          description: 'No pudimos escuchar tu mensaje con claridad. Intenta de nuevo o usa [T] para escribir.',
         });
         return;
       }
@@ -395,52 +385,61 @@ export function useVoicePipeline(
       toast({ title: 'Error', description: msg, variant: 'destructive' });
       setStatus('idle');
       setIsProcessing(false);
+      isProcessingRef.current = false;
     }
-  }, [transcribeMutation, processUserText, toast, setStatus]);
+  }, [processUserText, toast, setStatus]);
 
-  // ── Detener grabación ────────────────────────────────────────────────────
+  // ── Detener grabación y enviar audio ──────────────────────────────────────
   const stopRecording = useCallback(() => {
-    // Detener SpeechRecognition pero darle tiempo para enviar los resultados finales
+    console.log('[VoicePipeline] stopRecording called. Current recording state:', isRecordingRef.current);
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
     if (speechRecognitionRef.current) {
       try { speechRecognitionRef.current.stop(); } catch (_) {}
-      // No anulamos la ref inmediatamente — la callback onresult puede llegar aún
-      setTimeout(() => { speechRecognitionRef.current = null; }, 600);
+      setTimeout(() => { speechRecognitionRef.current = null; }, 500);
     }
+
+    isRecordingRef.current = false;
+    setIsRecording(false);
 
     const recorder = mediaRecorderRef.current;
-    if (!recorder) { setIsRecording(false); return; }
-
-    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-
-    if (recorder.state === 'recording') {
-      // Solicitar datos finales antes de detener
-      try { recorder.requestData(); } catch (_) {}
-      recorder.stop(); // dispara onstop → handleAudioBlob
+    if (!recorder) {
+      cleanupAudio();
+      return;
     }
 
-    cleanupAudio();
-    setIsRecording(false);
+    if (recorder.state === 'recording') {
+      try { recorder.requestData(); } catch (_) {}
+      // recorder.stop() disparará onstop de forma natural
+      recorder.stop();
+    } else {
+      cleanupAudio();
+    }
     mediaRecorderRef.current = null;
   }, [cleanupAudio]);
 
-  // ── Iniciar grabación ─────────────────────────────────────────────────────
+  // ── Iniciar grabación de audio ────────────────────────────────────────────
   const startRecording = useCallback(async () => {
-    if (isRecordingRef.current || isProcessingRef.current) return;
+    console.log('[VoicePipeline] startRecording called. isRecording:', isRecordingRef.current, 'isStarting:', isStartingRef.current);
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
 
+    isStartingRef.current = true;
     safeCancel();
     setLastError(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
+      isStartingRef.current = false;
       const msg = 'Tu navegador no soporta grabación. Usa Chrome o Safari 14.3+.';
       setLastError(msg);
       toast({ title: 'Navegador no compatible', description: msg, variant: 'destructive' });
       return;
     }
 
-    setStatus('listening');
-
     try {
-      // 1. Obtener primero el stream de micrófono con cancelación de ruido
+      // 1. Obtener stream de audio
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -450,8 +449,7 @@ export function useVoicePipeline(
       });
       audioStreamRef.current = stream;
 
-      // 2. Analyser para visualizador y detección de actividad de voz (VAD)
-      let analyser: AnalyserNode | null = null;
+      // 2. Analyser para visualizador de ondas
       try {
         const AudioCtxClass = window.AudioContext ||
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -459,7 +457,7 @@ export function useVoicePipeline(
         if (ctx.state === 'suspended') ctx.resume().catch(() => {});
         audioCtxRef.current = ctx;
         const source = ctx.createMediaStreamSource(stream);
-        analyser = ctx.createAnalyser();
+        const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
         source.connect(analyser);
         analyserRef.current = analyser;
@@ -467,13 +465,11 @@ export function useVoicePipeline(
         analyserRef.current = null;
       }
 
-      // 3. Reconocimiento de voz nativo en tiempo real (solo si no es iOS para evitar bloqueo de micrófono)
+      // 3. Reconocimiento de voz nativo si no es iOS
       speechRecognitionTextRef.current = '';
       const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
-      
       if (!isIOS) {
-        const SpeechRecognitionClass =
-          (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (SpeechRecognitionClass) {
           try {
             const recognition = new SpeechRecognitionClass();
@@ -516,75 +512,40 @@ export function useVoicePipeline(
       };
 
       recorder.onstop = () => {
-        if (vadTimerRef.current) {
-          clearInterval(vadTimerRef.current);
-          vadTimerRef.current = null;
-        }
+        console.log('[MediaRecorder] stopped, total chunks:', chunksRef.current.length);
         const chunks = chunksRef.current;
         const finalMime = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(chunks, { type: finalMime });
-        console.log('[MediaRecorder] stopped, total chunks:', chunks.length, 'blob size:', blob.size);
+        // Limpiar el stream solo DESPUÉS de que los chunks fueron empaquetados en el blob
+        cleanupAudio();
         handleAudioBlob(blob, finalMime);
       };
 
       recorder.onerror = (e) => {
         console.error('[MediaRecorder] error:', e);
         cleanupAudio();
+        isRecordingRef.current = false;
         setIsRecording(false);
         setStatus('idle');
         mediaRecorderRef.current = null;
         toast({ title: 'Error de grabación', description: 'Intenta de nuevo.', variant: 'destructive' });
       };
 
-      // timeslice 500ms para obtener chunks más fiables en móvil
       recordingStartTimeRef.current = Date.now();
-      recorder.start(500);
+      recorder.start(250); // Recolectar chunks cada 250ms para máxima fluidez
       mediaRecorderRef.current = recorder;
+      isRecordingRef.current = true;
       setIsRecording(true);
+      isStartingRef.current = false;
+      setStatus('listening');
 
-      // 4. VAD (Detección de voz inteligente): detecta cuando la persona habla y pausa por 1.6s para auto-enviar
-      if (analyser) {
-        let hasSpoken = false;
-        let silenceStart = 0;
-        const pcm = new Uint8Array(analyser.frequencyBinCount);
-
-        const vadInterval = setInterval(() => {
-          if (!isRecordingRef.current) {
-            clearInterval(vadInterval);
-            return;
-          }
-          const an = analyserRef.current;
-          if (!an) return;
-
-          an.getByteFrequencyData(pcm);
-          let sum = 0;
-          for (let i = 0; i < pcm.length; i++) sum += pcm[i];
-          const avg = sum / pcm.length;
-          const level = avg / 255;
-
-          if (level > 0.05) {
-            hasSpoken = true;
-            silenceStart = 0;
-          } else if (hasSpoken) {
-            if (silenceStart === 0) {
-              silenceStart = Date.now();
-            } else if (Date.now() - silenceStart > 1600) {
-              console.log('[VoicePipeline] VAD: Pausa de voz detectada. Auto-enviando...');
-              clearInterval(vadInterval);
-              stopRecording();
-            }
-          }
-        }, 120);
-
-        vadTimerRef.current = vadInterval;
-      }
-
-      // Auto-detener a los 35 segundos máximo por seguridad
+      // Parada automática de seguridad tras 45 segundos
       silenceTimerRef.current = setTimeout(() => {
         if (isRecordingRef.current) stopRecording();
-      }, 35_000);
+      }, 45_000);
 
     } catch (err) {
+      isStartingRef.current = false;
       cleanupAudio();
       setStatus('idle');
       const msg = err instanceof Error && err.name === 'NotAllowedError'
@@ -595,6 +556,18 @@ export function useVoicePipeline(
       toast({ title: 'Error de micrófono', description: msg, variant: 'destructive' });
     }
   }, [handleAudioBlob, stopRecording, cleanupAudio, setStatus, toast]);
+
+  // ── Toggle Inteligente de Grabación (Tocar para hablar -> Tocar para enviar) ──
+  const toggleRecording = useCallback(() => {
+    console.log('[VoicePipeline] toggleRecording: isRecording =', isRecordingRef.current, 'isProcessing =', isProcessingRef.current);
+    if (isProcessingRef.current || isStartingRef.current) return;
+
+    if (isRecordingRef.current || (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording')) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  }, [startRecording, stopRecording]);
 
   // ── Interrumpir TTS ───────────────────────────────────────────────────────
   const interruptSpeech = useCallback(() => {
@@ -613,6 +586,7 @@ export function useVoicePipeline(
 
     interruptSpeech();
     setIsProcessing(true);
+    isProcessingRef.current = true;
     setLastError(null);
     setStatus('thinking');
 
@@ -626,6 +600,7 @@ export function useVoicePipeline(
       toast({ title: 'Error', description: msg, variant: 'destructive' });
       setStatus('idle');
       setIsProcessing(false);
+      isProcessingRef.current = false;
     }
   }, [processUserText, interruptSpeech, toast, setStatus]);
 
@@ -694,6 +669,7 @@ export function useVoicePipeline(
   return {
     startRecording,
     stopRecording,
+    toggleRecording,
     sendTextMessage,
     speak,
     interruptSpeech,

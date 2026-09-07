@@ -22,6 +22,7 @@ export default function MirrorPage() {
   const { status, setStatus, mouthOpenAmount, setSpeakingVolume } = useAvatarState();
   const {
     isRecording, isProcessing, startRecording, stopRecording,
+    toggleRecording,
     sendTextMessage, speak,
     history, lastTranscript, lastError,
     analyser, interruptSpeech, resetConversation,
@@ -36,10 +37,10 @@ export default function MirrorPage() {
 
   const seenCountRef        = useRef(0);
   const prevStatusRef       = useRef(status);
-  const startRecordingRef   = useRef(startRecording);
+  const toggleRecordingRef  = useRef(toggleRecording);
   const interruptRef        = useRef(interruptSpeech);
   const resetRef            = useRef(resetConversation);
-  startRecordingRef.current = startRecording;
+  toggleRecordingRef.current = toggleRecording;
   interruptRef.current      = interruptSpeech;
   resetRef.current          = resetConversation;
 
@@ -102,7 +103,7 @@ export default function MirrorPage() {
 
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault();
-        startRecordingRef.current();
+        toggleRecordingRef.current();
       }
       if (e.code === 'Escape') {
         interruptRef.current();
@@ -309,6 +310,7 @@ export default function MirrorPage() {
           isProcessing={isProcessing}
           startRecording={startRecording}
           stopRecording={stopRecording}
+          toggleRecording={toggleRecording}
           analyser={analyser}
           lastTranscript={lastTranscript}
           onTextSubmit={handleTextSubmit}
