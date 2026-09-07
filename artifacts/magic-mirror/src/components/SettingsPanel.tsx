@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -10,8 +10,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Check } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { getSavedSettings, saveSettingsLocally, AppSettings } from '@/lib/settingsStorage';
 
 const settingsSchema = z.object({
   avatarName: z.string().min(1, 'El nombre es obligatorio'),
@@ -27,52 +28,70 @@ type SettingsFormValues = z.infer<typeof settingsSchema>;
 export function SettingsPanel() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: settings, isLoading } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
+  const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
   const updateSettings = useUpdateSettings();
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const initialValues = getSavedSettings();
 
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
-    defaultValues: {
-      avatarName: 'Mirror',
-      avatarPersonality: 'Amigable y sabio',
-      avatarTone: 'Cálido y claro',
-      systemPrompt: 'Eres Mirror, un asistente de IA inteligente. Responde siempre en español, de manera amigable, clara y concisa. Mantén tus respuestas en 3 oraciones o menos salvo que se pida más detalle.',
-      voiceId: 'es-MX-DaliaNeural',
-      voiceSpeed: 1.0,
-    },
+    defaultValues: initialValues,
   });
 
   useEffect(() => {
-    if (settings) {
+    if (settings && typeof settings === 'object' && 'avatarName' in settings && (settings as any).avatarName) {
       form.reset({
-        avatarName: settings.avatarName,
-        avatarPersonality: settings.avatarPersonality,
-        avatarTone: settings.avatarTone,
-        systemPrompt: settings.systemPrompt,
-        voiceId: settings.voiceId,
-        voiceSpeed: settings.voiceSpeed,
+        avatarName: (settings as any).avatarName,
+        avatarPersonality: (settings as any).avatarPersonality,
+        avatarTone: (settings as any).avatarTone,
+        systemPrompt: (settings as any).systemPrompt,
+        voiceId: (settings as any).voiceId,
+        voiceSpeed: (settings as any).voiceSpeed,
       });
+      saveSettingsLocally(settings as unknown as AppSettings);
     }
   }, [settings, form]);
 
-  const onSubmit = (data: SettingsFormValues) => {
-    updateSettings.mutate({ data }, {
-      onSuccess: () => {
-        toast({ title: 'Configuración guardada', description: 'Los parámetros se actualizaron correctamente.' });
-        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
-      },
-      onError: () => {
-        toast({ title: 'Error', description: 'No se pudieron actualizar los parámetros.', variant: 'destructive' });
-      },
-    });
+  const onSubmit = async (data: SettingsFormValues) => {
+    setIsSaving(true);
+    setSavedSuccess(false);
+
+    try {
+      // 1. Guardar de forma inmediata en el almacenamiento local del dispositivo
+      saveSettingsLocally(data as AppSettings);
+
+      // 2. Actualizar la caché de React Query en memoria
+      queryClient.setQueryData(getGetSettingsQueryKey(), data);
+
+      // 3. Intentar sincronizar con backend si está disponible (sin bloquear si falla)
+      try {
+        updateSettings.mutate({ data }, { onError: () => {} });
+      } catch (_) {}
+
+      setSavedSuccess(true);
+      toast({
+        title: 'Configuración guardada',
+        description: 'Los parámetros se guardaron y aplicaron correctamente en tu dispositivo.',
+      });
+
+      setTimeout(() => {
+        setSavedSuccess(false);
+      }, 2500);
+    } catch (err) {
+      toast({
+        title: 'Error al guardar',
+        description: 'No se pudieron guardar los parámetros localmente.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  if (isLoading) {
-    return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
-  }
-
   return (
-    <div className="max-w-2xl mx-auto glass-panel p-8 rounded-3xl mt-12 mb-12">
+    <div className="max-w-2xl mx-auto glass-panel p-5 sm:p-8 rounded-3xl mt-4 sm:mt-8 mb-8 shadow-2xl border border-white/10">
       <h2 className="text-2xl font-mono uppercase tracking-widest text-primary glow-text mb-8">Configuración</h2>
 
       <Form {...form}>
@@ -147,10 +166,24 @@ export function SettingsPanel() {
             </FormItem>
           )} />
 
-          <Button type="submit" disabled={updateSettings.isPending}
-            className="w-full bg-primary hover:bg-primary/90 text-black font-bold tracking-widest uppercase">
-            {updateSettings.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-            Guardar configuración
+          <Button 
+            type="submit" 
+            disabled={isSaving}
+            className="w-full h-12 bg-primary hover:bg-primary/90 text-black font-bold tracking-widest uppercase transition-all duration-200 active:scale-[0.98] shadow-[0_0_15px_rgba(0,240,192,0.3)]"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Guardando...
+              </>
+            ) : savedSuccess ? (
+              <>
+                <Check className="w-4 h-4 mr-2 text-black" />
+                ¡Guardado!
+              </>
+            ) : (
+              'Guardar configuración'
+            )}
           </Button>
         </form>
       </Form>

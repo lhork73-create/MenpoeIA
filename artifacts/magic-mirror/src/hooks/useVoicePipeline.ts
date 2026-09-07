@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { AvatarStatus } from './useAvatarState';
 import { vibrateError } from '@/lib/haptic';
 import { generateGeminiReply, transcribeAudioWithGemini } from '@/lib/gemini';
+import { getSavedSettings } from '@/lib/settingsStorage';
 
 export type ResponseLength = 'corta' | 'media' | 'larga';
 
@@ -58,9 +59,25 @@ const safeCancel = () => {
   try { if (hasSpeech()) window.speechSynthesis.cancel(); } catch {}
 };
 
-function getBestVoice(): SpeechSynthesisVoice | null {
+function getBestVoice(preferredVoice?: string): SpeechSynthesisVoice | null {
   if (!hasSpeech()) return null;
   const voices = window.speechSynthesis.getVoices();
+  if (voices.length === 0) return null;
+
+  if (preferredVoice) {
+    const pref = preferredVoice.toLowerCase();
+    const match = voices.find(v => 
+      v.name.toLowerCase().includes(pref) || 
+      v.voiceURI.toLowerCase().includes(pref) ||
+      (pref.includes('elvira') && v.name.toLowerCase().includes('elvira')) ||
+      (pref.includes('dalia') && v.name.toLowerCase().includes('dalia')) ||
+      (pref.includes('jorge') && v.name.toLowerCase().includes('jorge')) ||
+      (pref.includes('alvaro') && v.name.toLowerCase().includes('alvaro')) ||
+      (pref.includes('elena') && v.name.toLowerCase().includes('elena'))
+    );
+    if (match) return match;
+  }
+
   const checks = [
     (v: SpeechSynthesisVoice) => /neural|natural/i.test(v.name) && v.lang.startsWith('es'),
     (v: SpeechSynthesisVoice) => !v.localService && v.lang.startsWith('es'),
@@ -132,14 +149,23 @@ export function useVoicePipeline(
       if (!hasSpeech()) { resolve(); return; }
       safeCancel();
 
+      const savedSettings = getSavedSettings();
+      const currentRate = (settingsRef.current && typeof settingsRef.current === 'object' && 'voiceSpeed' in settingsRef.current && (settingsRef.current as any).voiceSpeed)
+        ? (settingsRef.current as any).voiceSpeed
+        : (savedSettings.voiceSpeed ?? ttsSpeedRef.current);
+
       const utter = new SpeechSynthesisUtterance(text);
-      utter.rate   = Math.max(0.7, Math.min(2.0, ttsSpeedRef.current));
+      utter.rate   = Math.max(0.7, Math.min(2.0, currentRate));
       utter.pitch  = 1.0;
       utter.volume = 1.0;
       utter.lang   = 'es-MX';
 
+      const preferredVoice = (settingsRef.current && typeof settingsRef.current === 'object' && 'voiceId' in settingsRef.current && (settingsRef.current as any).voiceId)
+        ? (settingsRef.current as any).voiceId
+        : savedSettings.voiceId;
+
       const applyVoice = () => {
-        const v = getBestVoice();
+        const v = getBestVoice(preferredVoice);
         if (v) utter.voice = v;
       };
       if (window.speechSynthesis.getVoices().length === 0) {
@@ -229,7 +255,10 @@ export function useVoicePipeline(
     setHistory(updatedHistory);
     historyRef.current = updatedHistory;
 
-    const basePrompt  = settingsRef.current?.systemPrompt ?? undefined;
+    const savedSettings = getSavedSettings();
+    const basePrompt = (settingsRef.current && typeof settingsRef.current === 'object' && 'systemPrompt' in settingsRef.current && (settingsRef.current as any).systemPrompt)
+      ? (settingsRef.current as any).systemPrompt
+      : savedSettings.systemPrompt;
     const lengthExtra = LENGTH_INSTRUCTION[responseLenRef.current];
     const finalPrompt = basePrompt ? basePrompt + lengthExtra : undefined;
 

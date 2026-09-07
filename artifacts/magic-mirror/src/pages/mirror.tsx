@@ -9,6 +9,7 @@ import { useAvatarState } from '@/hooks/useAvatarState';
 import { useVoicePipeline } from '@/hooks/useVoicePipeline';
 import { useTheme } from '@/hooks/useTheme';
 import { useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-react';
+import { getSavedSettings } from '@/lib/settingsStorage';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'wouter';
 import { Settings, History, RotateCcw, StopCircle } from 'lucide-react';
@@ -124,7 +125,10 @@ export default function MirrorPage() {
     if (dx < -60 && isTranscriptOpen)  handleToggleTranscript();
   };
 
-  const avatarName = settings?.avatarName ?? 'Mirror';
+  const saved = getSavedSettings();
+  const avatarName = (settings && typeof settings === 'object' && 'avatarName' in settings && (settings as any).avatarName)
+    ? (settings as any).avatarName
+    : saved.avatarName;
   const lastAiMsg  = [...history].reverse().find(m => m.role === 'assistant')?.content ?? '';
 
   return (
